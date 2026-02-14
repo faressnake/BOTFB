@@ -170,7 +170,7 @@ def webhook():
                 continue
 
             send_typing(sender_id, "typing_on")
-            time.sleep(1.5)
+            
 
             reply = get_ai_response(sender_id, message_text)
 
