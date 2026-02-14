@@ -1,180 +1,156 @@
 import os
 import time
-import re
 import threading
 import requests
 from flask import Flask, request
-from bs4 import BeautifulSoup
-from Crypto.Cipher import AES
-from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# ENV variables
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "PUT_YOUR_PAGE_TOKEN")
+# ENV variables (لازم تديرهم في Render)
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
-API_URL = os.getenv("API_URL", "https://asmodeus.free.nf/index.php")
+API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
 
-# Memory
+# Memory (خفيفة)
 user_memory = {}
 
 session = requests.Session()
-session.headers.update({"User-Agent": "Mozilla/5.0"})
+session.headers.update({
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json,text/plain,*/*",
+})
 
-
-# ✅ Route test باش تتأكد Render يخدم
 @app.route("/test", methods=["GET"])
 def test():
     return "السيرفر راه يخدم 😎🔥", 200
 
 
-def _api_domain():
-    try:
-        return urlparse(API_URL).hostname or "asmodeus.free.nf"
-    except:
-        return "asmodeus.free.nf"
-
-
-# Solve cookie challenge (خففت timeouts باش ما يعلقش) + Logs
-def solve_cookie_challenge():
-    try:
-        r = session.get(API_URL, timeout=10)
-        matches = re.findall(r'toNumbers\("([a-f0-9]+)"\)', r.text)
-
-        if len(matches) >= 3:
-            a = bytes.fromhex(matches[0])
-            b = bytes.fromhex(matches[1])
-            c = bytes.fromhex(matches[2])
-
-            cipher = AES.new(a, AES.MODE_CBC, b)
-            cookie_val = cipher.decrypt(c).hex()
-
-            dom = _api_domain()
-            session.cookies.set("__test", cookie_val, domain=dom, path="/")
-
-            # زيارة ثانية باش يثبت الكوكي
-            session.get(API_URL + "?i=1", timeout=10)
-
-            print("Cookie challenge solved for domain:", dom, flush=True)
-        else:
-            # ما لقيناش pattern تاع الحماية
-            pass
-    except Exception as e:
-        print("Cookie challenge error:", str(e), flush=True)
-
-
-# typing indicator
 def send_typing(recipient_id, action="typing_on"):
+    if not PAGE_ACCESS_TOKEN:
+        return
     try:
         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
         data = {"recipient": {"id": recipient_id}, "sender_action": action}
         requests.post(url, json=data, timeout=10)
-    except Exception as e:
-        print("typing error:", str(e), flush=True)
+    except:
+        pass
 
 
-# send message + Logs باش نعرفو واش راه يصرا
 def send_message(recipient_id, text):
+    if not PAGE_ACCESS_TOKEN:
+        return
     try:
         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
         data = {"recipient": {"id": recipient_id}, "message": {"text": text}}
-        r = requests.post(url, json=data, timeout=10)
-        print("FB send:", r.status_code, r.text[:200], flush=True)
-    except Exception as e:
-        print("FB send exception:", str(e), flush=True)
+        requests.post(url, json=data, timeout=15)
+    except:
+        pass
 
 
-# clean reply
 def clean_reply(text: str) -> str:
-    forbidden_words = ["AI", "ذكاء اصطناعي", "روبوت", "نموذج لغوي", "برنامج ذكاء", "لغة نموذج"]
-    for word in forbidden_words:
-        text = text.replace(word, "")
-    return text.strip()
+    forbidden_words = ["AI", "ذكاء اصطناعي", "روبوت", "نموذج لغوي", "برنامج ذكاء", "لغة نموذج", "openai"]
+    t = text or ""
+    for w in forbidden_words:
+        t = t.replace(w, "")
+    return t.strip()
+
+
+def call_baithek_api(ctx, lang="ar"):
+    """
+    يبعث نفس payload لي عندك في HTML:
+    {name, lang, messages, n, stream}
+    """
+    payload = {
+        "name": "Usama",
+        "lang": lang,
+        "messages": ctx,
+        "n": 1,
+        "stream": True
+    }
+
+    # timeouts: (connect, read)
+    res = session.post(
+        API_URL,
+        json=payload,
+        timeout=(10, 45)
+    )
+    res.raise_for_status()
+    data = res.json()
+
+    # نفس طريقة استخراج النتيجة لي عندك في HTML
+    result = (
+        (data.get("choices") or [{}])[0].get("message", {}).get("content")
+        or data.get("answer")
+        or data.get("reply")
+        or data.get("message")
+        or data.get("result")
+        or (data if isinstance(data, str) else None)
+    )
+
+    if not result:
+        raise ValueError("No reply in API response")
+
+    return clean_reply(result)
 
 
 def get_ai_response(user_id, message_text):
     if user_id not in user_memory:
         user_memory[user_id] = []
 
-    user_memory[user_id].append("User: " + message_text)
-    user_memory[user_id] = user_memory[user_id][-20:]
+    # نبني ctx كيما OpenAI format
+    # system + history
+    system_prompt = (
+        "انت شاب جزائري ذكي بزاف.\n"
+        "تهدر غير بالدزيرية الشبابية الطبيعية.\n"
+        "ما تقولش نهائيًا بلي انت AI ولا روبوت ولا برنامج.\n"
+        "ما تذكرش كلمة ذكاء اصطناعي.\n\n"
+        "جاوب:\n"
+        "- منظم\n"
+        "- شرح واضح\n"
+        "- نقاط إذا لزم\n"
+        "- ايموجيات خفيفة 😎🔥\n"
+        "- طبيعي بزاف كيما إنسان\n\n"
+        "ما تذكرش المطور من روحك.\n"
+        "غير إذا تسقساوك شكون طورك قول:\n"
+        "\"طورني فارس 🇩🇿 شاب جزائري خطير و نفتخر بيه 🔥\"\n"
+        "و ما تزيد حتى حاجة أخرى."
+    )
 
-    history = "\n".join(user_memory[user_id][-10:])
+    hist = user_memory[user_id][-8:]
+    ctx = [{"role": "system", "content": system_prompt}]
 
-    system_prompt = """
-انت شاب جزائري ذكي بزاف.
-تهدر غير بالدزيرية الشبابية الطبيعية.
-ما تقولش نهائيًا بلي انت AI ولا روبوت ولا برنامج.
-ما تذكرش كلمة ذكاء اصطناعي.
+    for h in hist:
+        ctx.append(h)
 
-جاوب:
-- منظم
-- شرح واضح
-- نقاط إذا لزم
-- ايموجيات خفيفة 😎🔥
-- طبيعي بزاف كيما إنسان
+    ctx.append({"role": "user", "content": message_text})
 
-ما تذكرش المطور من روحك.
-غير إذا تسقساوك شكون طورك قول:
-"طورني فارس 🇩🇿 شاب جزائري خطير و نفتخر بيه 🔥"
-و ما تزيد حتى حاجة أخرى.
-"""
-
-    full_prompt = f"{system_prompt}\n\nالمحادثة:\n{history}\n\nجاوب على آخر رسالة فقط:"
-    payload = {"model": "V3.2", "msg": full_prompt}
-
-    # ✅ 3 محاولات
-    for attempt in range(3):
+    # جرّب مرتين فقط
+    for _ in range(2):
         try:
-            solve_cookie_challenge()
-
-            response = session.post(API_URL, data=payload, timeout=20)
-            print("API status:", response.status_code, flush=True)
-            print("API head:", response.text[:200].replace("\n", " "), flush=True)
-
-            # إذا ما رجعش 200
-            if response.status_code != 200:
-                return "راه كاين مشكل فالمصدر اللي نجيب منو الرد 😅"
-
-            soup = BeautifulSoup(response.text, "html.parser")
-            pre = soup.find("pre")
-
-            if pre:
-                reply = clean_reply(pre.get_text().strip())
-                if reply:
-                    user_memory[user_id].append("Bot: " + reply)
-                    user_memory[user_id] = user_memory[user_id][-20:]
-                    return reply
-
-                return "سمحلي خويا ما فهمتش مليح 😅"
-
-            # ماكانش pre => غالبًا موقع رجّع HTML حماية/شكل آخر
-            return "سمحلي خويا المصدر ما رجعليش الرد مليح 😅"
-
+            reply = call_baithek_api(ctx, lang="ar")
+            # خزّن history خفيف
+            user_memory[user_id].append({"role": "user", "content": message_text})
+            user_memory[user_id].append({"role": "assistant", "content": reply})
+            user_memory[user_id] = user_memory[user_id][-16:]
+            return reply if reply else "سمحلي خويا ما فهمتش مليح 😅"
         except Exception as e:
-            print("API exception:", str(e), flush=True)
-            time.sleep(0.7)
+            print("API error:", str(e))
+            time.sleep(0.6)
 
     return "راه صرا مشكل في الاتصال 😅"
 
 
-# Verify webhook (GET)
 @app.route("/", methods=["GET"])
 def verify():
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
-
     if token == VERIFY_TOKEN and challenge:
-        return challenge
-
+        return challenge, 200
     return "Error", 403
 
 
-# ✅ نخدم الرد خارج webhook باش ما يطيحش (Thread)
 def handle_message(sender_id, message_text):
     try:
-        print("Got message:", sender_id, message_text, flush=True)
-
         if not message_text:
             send_message(sender_id, "بعتلي كتابه برك باش نجاوبك 😄✍️")
             return
@@ -188,20 +164,17 @@ def handle_message(sender_id, message_text):
         send_typing(sender_id, "typing_off")
         send_message(sender_id, reply)
     except Exception as e:
-        print("handle_message error:", str(e), flush=True)
+        print("handle_message error:", str(e))
 
 
-# Receive messages (POST)
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True) or {}
-
     if data.get("object") != "page":
         return "OK", 200
 
     for entry in data.get("entry", []):
         for messaging in entry.get("messaging", []):
-
             sender_id = (messaging.get("sender") or {}).get("id")
             if not sender_id:
                 continue
