@@ -110,9 +110,13 @@ def get_ai_response(user_id, message_text):
         try:
             solve_cookie_challenge()
 
-            response = session.post(API_URL, data=payload, timeout=60)
-            soup = BeautifulSoup(response.text, "html.parser")
-            pre = soup.find("pre")
+            response = session.post(API_URL, data=payload, timeout=20)
+
+print("API status:", response.status_code, flush=True)
+print("API first 200 chars:", response.text[:200].replace("\n", " "), flush=True)
+
+soup = BeautifulSoup(response.text, "html.parser")
+pre = soup.find("pre")
 
             if pre:
                 reply = clean_reply(pre.get_text().strip())
