@@ -25,6 +25,15 @@ session.headers.update({
 def test():
     return "السيرفر راه يخدم 😎🔥", 200
 
+@app.route("/privacy", methods=["GET"])
+def privacy():
+    return """
+    <h1>Privacy Policy</h1>
+    <p>This bot replies to messages on Facebook Messenger.</p>
+    <p>We do not sell personal data.</p>
+    <p>We keep only temporary conversation context to reply, then it gets overwritten.</p>
+    """, 200
+
 
 def send_typing(recipient_id, action="typing_on"):
     if not PAGE_ACCESS_TOKEN:
