@@ -20,6 +20,7 @@ session.headers.update({
     "Accept": "application/json,text/plain,*/*",
 })
 
+
 @app.route("/test", methods=["GET"])
 def test():
     return "السيرفر راه يخدم 😎🔥", 200
@@ -57,34 +58,47 @@ def clean_reply(text: str) -> str:
 
 def call_baithek_api(ctx, lang="ar"):
     """
-    يبعث نفس payload لي عندك في HTML:
-    {name, lang, messages, n, stream}
+    يبعث نفس payload بصح stream=False باش ما يطيحش الاتصال
     """
     payload = {
         "name": "Usama",
         "lang": lang,
         "messages": ctx,
         "n": 1,
-        "stream": True
+        "stream": False  # ✅ بدلناها
     }
 
-    # timeouts: (connect, read)
+    # ✅ Headers كيما المتصفح (باش ما يديرش reset)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Origin": "https://baithek.com",
+        "Referer": "https://baithek.com/",
+    }
+
     res = session.post(
         API_URL,
         json=payload,
-        timeout=(10, 45)
+        headers=headers,
+        timeout=(15, 60)  # ✅ زيدنا شوية
     )
+
+    # ✅ Debug في logs باش نعرفو السبب الحقيقي
+    print("API STATUS:", res.status_code)
+    print("API HEADERS:", dict(res.headers))
+    print("API TEXT:", (res.text or "")[:2000])
+
     res.raise_for_status()
+
     data = res.json()
 
-    # نفس طريقة استخراج النتيجة لي عندك في HTML
     result = (
         (data.get("choices") or [{}])[0].get("message", {}).get("content")
         or data.get("answer")
         or data.get("reply")
         or data.get("message")
         or data.get("result")
-        or (data if isinstance(data, str) else None)
     )
 
     if not result:
@@ -97,8 +111,6 @@ def get_ai_response(user_id, message_text):
     if user_id not in user_memory:
         user_memory[user_id] = []
 
-    # نبني ctx كيما OpenAI format
-    # system + history
     system_prompt = (
         "انت شاب جزائري ذكي بزاف.\n"
         "تهدر غير بالدزيرية الشبابية الطبيعية.\n"
@@ -118,24 +130,20 @@ def get_ai_response(user_id, message_text):
 
     hist = user_memory[user_id][-8:]
     ctx = [{"role": "system", "content": system_prompt}]
-
     for h in hist:
         ctx.append(h)
-
     ctx.append({"role": "user", "content": message_text})
 
-    # جرّب مرتين فقط
     for _ in range(2):
         try:
             reply = call_baithek_api(ctx, lang="ar")
-            # خزّن history خفيف
             user_memory[user_id].append({"role": "user", "content": message_text})
             user_memory[user_id].append({"role": "assistant", "content": reply})
             user_memory[user_id] = user_memory[user_id][-16:]
             return reply if reply else "سمحلي خويا ما فهمتش مليح 😅"
         except Exception as e:
-            print("API error:", str(e))
-            time.sleep(0.6)
+            print("API error:", repr(e))  # ✅ بدلناها
+            time.sleep(0.7)
 
     return "راه صرا مشكل في الاتصال 😅"
 
@@ -164,7 +172,7 @@ def handle_message(sender_id, message_text):
         send_typing(sender_id, "typing_off")
         send_message(sender_id, reply)
     except Exception as e:
-        print("handle_message error:", str(e))
+        print("handle_message error:", repr(e))
 
 
 @app.route("/", methods=["POST"])
@@ -189,25 +197,7 @@ def webhook():
             ).start()
 
     return "OK", 200
-@app.route("/envcheck", methods=["GET"])
-def envcheck():
-    return {
-        "API_URL": os.getenv("API_URL"),
-        "VERIFY_TOKEN": os.getenv("VERIFY_TOKEN"),
-        "HAS_PAGE_TOKEN": bool(os.getenv("PAGE_ACCESS_TOKEN"))
-    }, 200
 
-@app.route("/fbcheck", methods=["GET"])
-def fbcheck():
-    try:
-        r = requests.get(
-            "https://graph.facebook.com/v18.0/me",
-            params={"access_token": os.getenv("PAGE_ACCESS_TOKEN","")},
-            timeout=10
-        )
-        return {"status": r.status_code, "response": r.json()}, 200
-    except Exception as e:
-        return {"error": str(e)}, 500
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
