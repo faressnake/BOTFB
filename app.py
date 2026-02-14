@@ -6,6 +6,7 @@ import requests
 from flask import Flask, request
 from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -27,7 +28,14 @@ def test():
     return "السيرفر راه يخدم 😎🔥", 200
 
 
-# Solve cookie challenge (خففت timeouts باش ما يعلقش)
+def _api_domain():
+    try:
+        return urlparse(API_URL).hostname or "asmodeus.free.nf"
+    except:
+        return "asmodeus.free.nf"
+
+
+# Solve cookie challenge (خففت timeouts باش ما يعلقش) + Logs
 def solve_cookie_challenge():
     try:
         r = session.get(API_URL, timeout=10)
@@ -41,10 +49,18 @@ def solve_cookie_challenge():
             cipher = AES.new(a, AES.MODE_CBC, b)
             cookie_val = cipher.decrypt(c).hex()
 
-            session.cookies.set("__test", cookie_val, domain="asmodeus.free.nf", path="/")
+            dom = _api_domain()
+            session.cookies.set("__test", cookie_val, domain=dom, path="/")
+
+            # زيارة ثانية باش يثبت الكوكي
             session.get(API_URL + "?i=1", timeout=10)
-    except:
-        pass
+
+            print("Cookie challenge solved for domain:", dom, flush=True)
+        else:
+            # ما لقيناش pattern تاع الحماية
+            pass
+    except Exception as e:
+        print("Cookie challenge error:", str(e), flush=True)
 
 
 # typing indicator
@@ -53,18 +69,19 @@ def send_typing(recipient_id, action="typing_on"):
         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
         data = {"recipient": {"id": recipient_id}, "sender_action": action}
         requests.post(url, json=data, timeout=10)
-    except:
-        pass
+    except Exception as e:
+        print("typing error:", str(e), flush=True)
 
 
-# send message
+# send message + Logs باش نعرفو واش راه يصرا
 def send_message(recipient_id, text):
     try:
         url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
         data = {"recipient": {"id": recipient_id}, "message": {"text": text}}
-        requests.post(url, json=data, timeout=10)
-    except:
-        pass
+        r = requests.post(url, json=data, timeout=10)
+        print("FB send:", r.status_code, r.text[:200], flush=True)
+    except Exception as e:
+        print("FB send exception:", str(e), flush=True)
 
 
 # clean reply
@@ -106,25 +123,37 @@ def get_ai_response(user_id, message_text):
     full_prompt = f"{system_prompt}\n\nالمحادثة:\n{history}\n\nجاوب على آخر رسالة فقط:"
     payload = {"model": "V3.2", "msg": full_prompt}
 
-    for _ in range(2):
+    # ✅ 3 محاولات
+    for attempt in range(3):
         try:
             solve_cookie_challenge()
 
-            # ✅ نقصت timeout باش ما يعلقش
             response = session.post(API_URL, data=payload, timeout=20)
+            print("API status:", response.status_code, flush=True)
+            print("API head:", response.text[:200].replace("\n", " "), flush=True)
+
+            # إذا ما رجعش 200
+            if response.status_code != 200:
+                return "راه كاين مشكل فالمصدر اللي نجيب منو الرد 😅"
 
             soup = BeautifulSoup(response.text, "html.parser")
             pre = soup.find("pre")
 
             if pre:
                 reply = clean_reply(pre.get_text().strip())
-                user_memory[user_id].append("Bot: " + reply)
-                user_memory[user_id] = user_memory[user_id][-20:]
-                return reply if reply else "سمحلي خويا ما فهمتش مليح 😅"
+                if reply:
+                    user_memory[user_id].append("Bot: " + reply)
+                    user_memory[user_id] = user_memory[user_id][-20:]
+                    return reply
 
-            return "سمحلي خويا صرا مشكل 😅"
-        except:
-            time.sleep(0.5)
+                return "سمحلي خويا ما فهمتش مليح 😅"
+
+            # ماكانش pre => غالبًا موقع رجّع HTML حماية/شكل آخر
+            return "سمحلي خويا المصدر ما رجعليش الرد مليح 😅"
+
+        except Exception as e:
+            print("API exception:", str(e), flush=True)
+            time.sleep(0.7)
 
     return "راه صرا مشكل في الاتصال 😅"
 
@@ -144,6 +173,8 @@ def verify():
 # ✅ نخدم الرد خارج webhook باش ما يطيحش (Thread)
 def handle_message(sender_id, message_text):
     try:
+        print("Got message:", sender_id, message_text, flush=True)
+
         if not message_text:
             send_message(sender_id, "بعتلي كتابه برك باش نجاوبك 😄✍️")
             return
@@ -156,9 +187,8 @@ def handle_message(sender_id, message_text):
         reply = get_ai_response(sender_id, message_text)
         send_typing(sender_id, "typing_off")
         send_message(sender_id, reply)
-    except:
-        # ما نخلي حتى exception يطيّح الخدمة
-        pass
+    except Exception as e:
+        print("handle_message error:", str(e), flush=True)
 
 
 # Receive messages (POST)
@@ -179,14 +209,12 @@ def webhook():
             msg_obj = messaging.get("message") or {}
             message_text = (msg_obj.get("text") or "").strip()
 
-            # ✅ نخدم في Thread
             threading.Thread(
                 target=handle_message,
                 args=(sender_id, message_text),
                 daemon=True
             ).start()
 
-    # ✅ لازم نرجعو OK بسرعة
     return "OK", 200
 
 
