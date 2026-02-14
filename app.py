@@ -33,7 +33,13 @@ def privacy():
     <p>We do not sell personal data.</p>
     <p>We keep only temporary conversation context to reply, then it gets overwritten.</p>
     """, 200
-
+@app.route("/delete-data", methods=["GET"])
+def delete_data():
+    return """
+    <h1>Data Deletion Instructions</h1>
+    <p>If you want your data deleted, send us a message on our Facebook page requesting deletion.</p>
+    <p>We will remove all conversation data immediately.</p>
+    """, 200
 
 def send_typing(recipient_id, action="typing_on"):
     if not PAGE_ACCESS_TOKEN:
