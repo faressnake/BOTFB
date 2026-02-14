@@ -1,6 +1,7 @@
 import os
 import time
 import re
+import threading
 import requests
 from flask import Flask, request
 from bs4 import BeautifulSoup
@@ -26,10 +27,10 @@ def test():
     return "السيرفر راه يخدم 😎🔥", 200
 
 
-# Solve cookie challenge
+# Solve cookie challenge (خففت timeouts باش ما يعلقش)
 def solve_cookie_challenge():
     try:
-        r = session.get(API_URL, timeout=30)
+        r = session.get(API_URL, timeout=10)
         matches = re.findall(r'toNumbers\("([a-f0-9]+)"\)', r.text)
 
         if len(matches) >= 3:
@@ -41,7 +42,7 @@ def solve_cookie_challenge():
             cookie_val = cipher.decrypt(c).hex()
 
             session.cookies.set("__test", cookie_val, domain="asmodeus.free.nf", path="/")
-            session.get(API_URL + "?i=1", timeout=30)
+            session.get(API_URL + "?i=1", timeout=10)
     except:
         pass
 
@@ -103,20 +104,17 @@ def get_ai_response(user_id, message_text):
 """
 
     full_prompt = f"{system_prompt}\n\nالمحادثة:\n{history}\n\nجاوب على آخر رسالة فقط:"
-
     payload = {"model": "V3.2", "msg": full_prompt}
 
     for _ in range(2):
         try:
             solve_cookie_challenge()
 
+            # ✅ نقصت timeout باش ما يعلقش
             response = session.post(API_URL, data=payload, timeout=20)
 
-print("API status:", response.status_code, flush=True)
-print("API first 200 chars:", response.text[:200].replace("\n", " "), flush=True)
-
-soup = BeautifulSoup(response.text, "html.parser")
-pre = soup.find("pre")
+            soup = BeautifulSoup(response.text, "html.parser")
+            pre = soup.find("pre")
 
             if pre:
                 reply = clean_reply(pre.get_text().strip())
@@ -126,7 +124,7 @@ pre = soup.find("pre")
 
             return "سمحلي خويا صرا مشكل 😅"
         except:
-            time.sleep(1)
+            time.sleep(0.5)
 
     return "راه صرا مشكل في الاتصال 😅"
 
@@ -141,6 +139,26 @@ def verify():
         return challenge
 
     return "Error", 403
+
+
+# ✅ نخدم الرد خارج webhook باش ما يطيحش (Thread)
+def handle_message(sender_id, message_text):
+    try:
+        if not message_text:
+            send_message(sender_id, "بعتلي كتابه برك باش نجاوبك 😄✍️")
+            return
+
+        if "شكون طورك" in message_text:
+            send_message(sender_id, "طورني فارس 🇩🇿 شاب جزائري خطير و نفتخر بيه 🔥")
+            return
+
+        send_typing(sender_id, "typing_on")
+        reply = get_ai_response(sender_id, message_text)
+        send_typing(sender_id, "typing_off")
+        send_message(sender_id, reply)
+    except:
+        # ما نخلي حتى exception يطيّح الخدمة
+        pass
 
 
 # Receive messages (POST)
@@ -161,22 +179,14 @@ def webhook():
             msg_obj = messaging.get("message") or {}
             message_text = (msg_obj.get("text") or "").strip()
 
-            if not message_text:
-                send_message(sender_id, "بعتلي كتابه برك باش نجاوبك 😄✍️")
-                continue
+            # ✅ نخدم في Thread
+            threading.Thread(
+                target=handle_message,
+                args=(sender_id, message_text),
+                daemon=True
+            ).start()
 
-            if "شكون طورك" in message_text:
-                send_message(sender_id, "طورني فارس 🇩🇿 شاب جزائري خطير و نفتخر بيه 🔥")
-                continue
-
-            send_typing(sender_id, "typing_on")
-            
-
-            reply = get_ai_response(sender_id, message_text)
-
-            send_typing(sender_id, "typing_off")
-            send_message(sender_id, reply)
-
+    # ✅ لازم نرجعو OK بسرعة
     return "OK", 200
 
 
