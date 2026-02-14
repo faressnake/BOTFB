@@ -189,7 +189,25 @@ def webhook():
             ).start()
 
     return "OK", 200
+@app.route("/envcheck", methods=["GET"])
+def envcheck():
+    return {
+        "API_URL": os.getenv("API_URL"),
+        "VERIFY_TOKEN": os.getenv("VERIFY_TOKEN"),
+        "HAS_PAGE_TOKEN": bool(os.getenv("PAGE_ACCESS_TOKEN"))
+    }, 200
 
+@app.route("/fbcheck", methods=["GET"])
+def fbcheck():
+    try:
+        r = requests.get(
+            "https://graph.facebook.com/v18.0/me",
+            params={"access_token": os.getenv("PAGE_ACCESS_TOKEN","")},
+            timeout=10
+        )
+        return {"status": r.status_code, "response": r.json()}, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
