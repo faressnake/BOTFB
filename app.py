@@ -1,9 +1,8 @@
 import os
 import time
-import queue
-import requests
 import threading
-from flask import Flask, request
+import requests
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -11,10 +10,9 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
 
+# Memory خفيفة + حالة بسيطة للأوامر (طقس/صلاة)
 user_memory = {}
-user_state = {}   # sender_id -> {"mode": "weather_wait_city"} / "prayer_wait_city"
-
-jobs = queue.Queue(maxsize=500)
+user_state = {}  # {user_id: {"mode":"weather_wait_city"} ...}
 
 session = requests.Session()
 session.headers.update({
@@ -22,53 +20,9 @@ session.headers.update({
     "Accept": "application/json,text/plain,*/*",
 })
 
-WILAYAS = {
-  "أدرار":"Adrar","الشلف":"Chlef","الأغواط":"Laghouat","أم البواقي":"Oum El Bouaghi","باتنة":"Batna","بجاية":"Bejaia",
-  "بسكرة":"Biskra","بشار":"Bechar","البليدة":"Blida","البويرة":"Bouira","تمنراست":"Tamanrasset","تبسة":"Tebessa",
-  "تلمسان":"Tlemcen","تيارت":"Tiaret","تيزي وزو":"Tizi Ouzou","الجزائر":"Algiers","الجلفة":"Djelfa","جيجل":"Jijel",
-  "سطيف":"Setif","سعيدة":"Saida","سكيكدة":"Skikda","سيدي بلعباس":"Sidi Bel Abbes","عنابة":"Annaba","قالمة":"Guelma",
-  "قسنطينة":"Constantine","المدية":"Medea","مستغانم":"Mostaganem","المسيلة":"M'Sila","معسكر":"Mascara","ورقلة":"Ouargla",
-  "وهران":"Oran","البيض":"El Bayadh","إليزي":"Illizi","برج بوعريريج":"Bordj Bou Arreridj","بومرداس":"Boumerdes",
-  "الطارف":"El Tarf","تندوف":"Tindouf","تيسمسيلت":"Tissemsilt","الوادي":"El Oued","خنشلة":"Khenchela","سوق أهراس":"Souk Ahras",
-  "تيبازة":"Tipaza","ميلة":"Mila","عين الدفلى":"Ain Defla","النعامة":"Naama","عين تموشنت":"Ain Temouchent",
-  "غرداية":"Ghardaia","غليزان":"Relizane",
-  "تيميمون":"Timimoun","برج باجي مختار":"Bordj Badji Mokhtar","أولاد جلال":"Ouled Djellal","بني عباس":"Beni Abbes",
-  "إن صالح":"In Salah","إن قزام":"In Guezzam","تقرت":"Touggourt","جانت":"Djanet","المغير":"El M'Ghair","المنيعة":"El Meniaa"
-}
-WILAYAS_EN = {v.lower(): v for v in WILAYAS.values()}
-
-DAY_AR = ["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"]
-
-def resolve_wilaya(user_text: str):
-    t = (user_text or "").strip()
-    if not t:
-        return None
-    tl = t.lower()
-    if t in WILAYAS:
-        return WILAYAS[t]
-    if tl in WILAYAS_EN:
-        return WILAYAS_EN[tl]
-    t2 = tl.replace("’","").replace("'","").replace("-"," ").replace("  "," ")
-    for ar, en in WILAYAS.items():
-        if t2 == en.lower():
-            return en
-    return None
-
-def fb_post(payload, timeout=15):
-    if not PAGE_ACCESS_TOKEN:
-        return
-    url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    try:
-        requests.post(url, json=payload, timeout=timeout)
-    except:
-        pass
-
-def send_typing(recipient_id, action="typing_on"):
-    fb_post({"recipient": {"id": recipient_id}, "sender_action": action}, timeout=5)
-
-def send_message(recipient_id, text):
-    fb_post({"recipient": {"id": recipient_id}, "message": {"text": text}}, timeout=15)
-
+# ---------------------------
+# صفحات ضرورية لفيسبوك
+# ---------------------------
 @app.route("/test", methods=["GET"])
 def test():
     return "السيرفر راه يخدم 😎🔥", 200
@@ -90,38 +44,96 @@ def delete_data():
     <p>We will remove all conversation data immediately.</p>
     """, 200
 
-def setup_persistent_menu():
+# ---------------------------
+# أدوات Messenger
+# ---------------------------
+def fb_post(url, payload, timeout=20):
     if not PAGE_ACCESS_TOKEN:
-        return "Missing PAGE_ACCESS_TOKEN"
-    url = f"https://graph.facebook.com/v18.0/me/messenger_profile?access_token={PAGE_ACCESS_TOKEN}"
+        return None, "PAGE_ACCESS_TOKEN ناقص"
+    full = f"https://graph.facebook.com/v18.0{url}"
+    try:
+        r = requests.post(full, params={"access_token": PAGE_ACCESS_TOKEN}, json=payload, timeout=timeout)
+        return r, None
+    except Exception as e:
+        return None, repr(e)
+
+def send_typing(recipient_id, action="typing_on"):
+    if not PAGE_ACCESS_TOKEN:
+        return
+    payload = {"recipient": {"id": recipient_id}, "sender_action": action}
+    fb_post("/me/messages", payload, timeout=10)
+
+def send_message(recipient_id, text):
+    if not PAGE_ACCESS_TOKEN:
+        return
+    payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
+    fb_post("/me/messages", payload, timeout=20)
+
+def send_quick_replies(recipient_id, text, replies):
+    """
+    replies = [{"title":"🌦️ الطقس","payload":"CMD_WEATHER"}, ...]
+    """
+    if not PAGE_ACCESS_TOKEN:
+        return
     payload = {
-        "get_started": {"payload": "GET_STARTED"},
-        "persistent_menu": [{
-            "locale": "default",
-            "composer_input_disabled": False,
-            "call_to_actions": [
-                {"type": "postback", "title": "🌦️ الطقس", "payload": "MENU_WEATHER"},
-                {"type": "postback", "title": "🕌 أوقات الصلاة", "payload": "MENU_PRAYER"},
-                {"type": "postback", "title": "ℹ️ About", "payload": "MENU_ABOUT"}
+        "recipient": {"id": recipient_id},
+        "message": {
+            "text": text,
+            "quick_replies": [
+                {"content_type": "text", "title": r["title"][:20], "payload": r["payload"]}
+                for r in replies
             ]
-        }]
+        }
     }
-    r = requests.post(url, json=payload, timeout=20)
-    return f"{r.status_code} {r.text[:500]}"
+    fb_post("/me/messages", payload, timeout=20)
+
+# ---------------------------
+# ✅ Setup الحقيقي (Get Started + Persistent Menu)
+# ---------------------------
+def setup_messenger_profile():
+    # Get Started + Persistent Menu
+    profile_payload = {
+        "get_started": {"payload": "GET_STARTED"},
+        "persistent_menu": [
+            {
+                "locale": "default",
+                "composer_input_disabled": False,
+                "call_to_actions": [
+                    {"type": "postback", "title": "🌦️ الطقس", "payload": "CMD_WEATHER"},
+                    {"type": "postback", "title": "🕌 أوقات الصلاة", "payload": "CMD_PRAYER"},
+                    {"type": "postback", "title": "ℹ️ About", "payload": "CMD_ABOUT"},
+                ]
+            }
+        ]
+    }
+    r, err = fb_post("/me/messenger_profile", profile_payload, timeout=25)
+    if err:
+        return {"ok": False, "error": err}
+    return {"ok": r.ok, "status": r.status_code, "response": r.text}
 
 @app.route("/setup", methods=["GET"])
 def setup():
-    return setup_persistent_menu(), 200
+    result = setup_messenger_profile()
+    # باش تشوف واش صار في Render logs
+    print("SETUP RESULT:", result)
+    return jsonify(result), (200 if result.get("ok") else 500)
 
+# ---------------------------
+# تنظيف الرد من كلمات
+# ---------------------------
 def clean_reply(text: str) -> str:
     forbidden_words = ["AI", "ذكاء اصطناعي", "روبوت", "نموذج لغوي", "برنامج ذكاء", "لغة نموذج", "openai"]
-    t = (text or "")
+    t = text or ""
     for w in forbidden_words:
         t = t.replace(w, "")
     return t.strip()
 
+# ---------------------------
+# استدعاء API تاعك
+# ---------------------------
 def call_baithek_api(ctx, lang="ar"):
     payload = {"name": "Usama", "lang": lang, "messages": ctx, "n": 1, "stream": False}
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
         "Accept": "*/*",
@@ -129,9 +141,11 @@ def call_baithek_api(ctx, lang="ar"):
         "Origin": "https://baithek.com",
         "Referer": "https://baithek.com/",
     }
-    res = session.post(API_URL, json=payload, headers=headers, timeout=(12, 35))
+
+    res = session.post(API_URL, json=payload, headers=headers, timeout=(15, 60))
     res.raise_for_status()
     data = res.json()
+
     result = (
         (data.get("choices") or [{}])[0].get("message", {}).get("content")
         or data.get("answer") or data.get("reply") or data.get("message") or data.get("result")
@@ -140,175 +154,203 @@ def call_baithek_api(ctx, lang="ar"):
         raise ValueError("No reply in API response")
     return clean_reply(result)
 
-def system_prompt():
-    return (
-        "راك خويا/أختي 😄☕ نهدر معاك بدزيرية طبيعية.\n"
-        "نعاونك فكلش (دراسة/نصائح/تقنية/حياة…) وبطريقة مفهومة.\n"
-        "سؤال قصير = رد قصير، سؤال يحتاج شرح = نقاط + مثال.\n"
-        "استعمل ايموجيات في بلاصتهم 😂🔥💪☕\n"
-        "ممنوع تقول بلي انت AI ولا تذكر ذكاء اصطناعي.\n"
-        "إذا تسقساوك شكون طورك جاوب فقط: \"طورني فارس 🇩🇿 شاب جزائري خطير ونفتخر بيه 🔥\""
-    )
-
-def get_ai_response(user_id, message_text):
-    if user_id not in user_memory:
-        user_memory[user_id] = []
-    hist = user_memory[user_id][-6:]
-    ctx = [{"role": "system", "content": system_prompt()}] + hist + [{"role": "user", "content": message_text}]
-    reply = call_baithek_api(ctx, lang="ar")
-    user_memory[user_id].append({"role": "user", "content": message_text})
-    user_memory[user_id].append({"role": "assistant", "content": reply})
-    user_memory[user_id] = user_memory[user_id][-14:]
-    return reply if reply else "سمحلي خويا ما فهمتش مليح 😅"
-
-def wx_emoji(rain_mm, wind_kmh, tmax):
-    if rain_mm >= 8: return "⛈️"
-    if rain_mm >= 1: return "🌧️"
-    if wind_kmh >= 35: return "🌬️"
-    if tmax >= 32: return "🌞"
-    return "⛅"
-
-def get_weather_5days(wilaya_en: str):
-    geo = session.get(
+# ---------------------------
+# ✅ Weather (Open-Meteo) + ✅ Prayer (AlAdhan)
+# ---------------------------
+def weather_5days(city: str) -> str:
+    # Geocoding
+    geo = requests.get(
         "https://geocoding-api.open-meteo.com/v1/search",
-        params={"name": f"{wilaya_en}, Algeria", "count": 1, "language": "en", "format": "json"},
+        params={"name": city, "count": 1, "language": "en", "format": "json"},
         timeout=15
     ).json()
-    results = (geo.get("results") or [])
-    if not results:
-        return None
 
-    lat = results[0]["latitude"]; lon = results[0]["longitude"]
-    fc = session.get(
+    if not geo.get("results"):
+        return "ما لقيتش هاد البلاصة 😅 جرب اسم آخر (مثال: Alger, Oran, Setif) 🌦️"
+
+    r0 = geo["results"][0]
+    lat, lon = r0["latitude"], r0["longitude"]
+    place = f'{r0.get("name","")}, {r0.get("country","")}'
+
+    fc = requests.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
-            "latitude": lat, "longitude": lon,
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
-            "timezone": "Africa/Algiers"
+            "latitude": lat,
+            "longitude": lon,
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max",
+            "forecast_days": 5,
+            "timezone": "auto"
         },
         timeout=20
     ).json()
 
-    d = fc.get("daily") or {}
-    times = d.get("time", [])[:5]
-    tmax = d.get("temperature_2m_max", [])[:5]
-    tmin = d.get("temperature_2m_min", [])[:5]
-    rain = d.get("precipitation_sum", [])[:5]
-    wind = d.get("windspeed_10m_max", [])[:5]
+    d = fc.get("daily", {})
+    dates = d.get("time", [])
+    tmax = d.get("temperature_2m_max", [])
+    tmin = d.get("temperature_2m_min", [])
+    pop = d.get("precipitation_probability_max", [])
+    wind = d.get("windspeed_10m_max", [])
 
-    lines = [f"🌦️ طقس **{wilaya_en}** (5 أيام) 👇"]
-    base = (time.gmtime().tm_wday + 1) % 7
-    for i in range(len(times)):
-        emoji = wx_emoji(rain[i], wind[i], tmax[i])
+    lines = [f"🌦️ طقس 5 أيام لـ {place}:"]
+    for i in range(min(5, len(dates))):
+        rain_emoji = "🌧️" if (pop[i] if i < len(pop) else 0) >= 40 else "☁️"
         lines.append(
-            f"{emoji} {DAY_AR[(base+i)%7]}: {int(tmax[i])}°/{int(tmin[i])}° | 💨 {int(wind[i])}km/h | 🌧️ {rain[i]}mm"
+            f"- {dates[i]}: {rain_emoji} {tmin[i]}° / {tmax[i]}° | 💨 {wind[i]} km/h | 🌧️ {pop[i]}%"
         )
-    lines.append("✍️ اكتب ولاية أخرى إذا تحب 😉")
     return "\n".join(lines)
 
-def get_prayer_times(wilaya_en: str):
-    r = session.get(
+def prayer_times(city: str, country="Algeria") -> str:
+    # AlAdhan by city
+    data = requests.get(
         "https://api.aladhan.com/v1/timingsByCity",
-        params={"city": wilaya_en, "country": "Algeria", "method": 3},
+        params={"city": city, "country": country, "method": 3},
         timeout=20
     ).json()
-    data = (r.get("data") or {})
-    timings = (data.get("timings") or {})
-    if not timings:
-        return None
 
+    if data.get("code") != 200:
+        return "ما قدرتش نجيب أوقات الصلاة 😅 جرب اسم الولاية بالإنجليزية (Algiers / Oran / Annaba) 🕌"
+
+    t = data["data"]["timings"]
     return (
-        f"🕌 مواقيت الصلاة في **{wilaya_en}** 👇\n"
-        f"🌙 الفجر: {timings.get('Fajr')}\n"
-        f"🌅 الشروق: {timings.get('Sunrise')}\n"
-        f"☀️ الظهر: {timings.get('Dhuhr')}\n"
-        f"🌤️ العصر: {timings.get('Asr')}\n"
-        f"🌇 المغرب: {timings.get('Maghrib')}\n"
-        f"🌃 العشاء: {timings.get('Isha')}\n\n"
-        f"✍️ اكتب ولاية أخرى إذا تحب 😉"
+        f"🕌 أوقات الصلاة في {city}:\n"
+        f"🌙 Fajr: {t.get('Fajr')}\n"
+        f"☀️ Dhuhr: {t.get('Dhuhr')}\n"
+        f"🏞️ Asr: {t.get('Asr')}\n"
+        f"🌇 Maghrib: {t.get('Maghrib')}\n"
+        f"🌃 Isha: {t.get('Isha')}\n"
+        f"\nإذا حبيت ولاية أخرى قولّي اسمها 😉"
     )
 
 def about_text():
     return (
-        "ℹ️ Botivity™\n"
-        "مساعد مسنجر دزيري 😄☕ يعاونك فكلش: دراسة 📚، نصائح 💡، تقنية 💻، أفكار مشاريع 🚀.\n\n"
-        "🔥 سريع ومرح ومنظم.\n"
-        "👨‍💻 المطور: Fares (FaresCodeX) 🇩🇿🔥"
+        "ℹ️ Botivity 🔥\n"
+        "بوت مسنجر خفيف وذكي، يجاوبك و يعاونك في أي حاجة: دراسة، نصائح، أفكار، وحتّى خدمات كيما الطقس والصلاة 😎\n\n"
+        "✨ Smarter Conversations Start Here\n"
+        "👨‍💻 By FaresCodeX 🇩🇿🔥"
     )
 
+# ---------------------------
+# الذكاء (الرد العام)
+# ---------------------------
+def get_ai_response(user_id, message_text):
+    if user_id not in user_memory:
+        user_memory[user_id] = []
+
+    system_prompt = (
+        "انت شاب جزائري دزيري 100%.\n"
+        "تهدر كيما صاحب في قهوة، طبيعي ومرح.\n"
+        "انت مساعد شامل تعاون في أي موضوع.\n"
+        "ردودك تكون على قد السؤال: القصير قصير، واللي يحتاج شرح تنظمو بنقاط.\n"
+        "استعمل ايموجيات بذكاء حسب السياق (ماشي بزاف).\n"
+        "إذا السؤال غامض اسقسي توضيح.\n"
+        "مهم: ما تقولش بلي انت AI ولا روبوت ولا تذكر ذكاء اصطناعي.\n"
+        "غير إذا تسقساوك شكون طورك قول: \"طورني فارس 🇩🇿 شاب جزائري خطير ونفتخر بيه 🔥\" وما تزيد حتى حاجة."
+    )
+
+    hist = user_memory[user_id][-8:]
+    ctx = [{"role": "system", "content": system_prompt}]
+    ctx.extend(hist)
+    ctx.append({"role": "user", "content": message_text})
+
+    for _ in range(2):
+        try:
+            reply = call_baithek_api(ctx, lang="ar")
+            user_memory[user_id].append({"role": "user", "content": message_text})
+            user_memory[user_id].append({"role": "assistant", "content": reply})
+            user_memory[user_id] = user_memory[user_id][-16:]
+            return reply or "سمحلي ما فهمتش مليح 😅"
+        except Exception as e:
+            print("API error:", repr(e))
+            time.sleep(0.7)
+
+    return "راه صرا مشكل في الاتصال 😅"
+
+# ---------------------------
+# ✅ معالجة الأزرار (postbacks) + الأوامر
+# ---------------------------
 def handle_postback(sender_id, payload):
     if payload == "GET_STARTED":
-        send_message(sender_id, "مرحبا بيك في Botivity™ 😄\nاختار من المينو: 🌦️ الطقس / 🕌 الصلاة / ℹ️ About")
+        send_quick_replies(
+            sender_id,
+            "أهلا بيك في Botivity 😎🔥 واش تحب دير؟",
+            [
+                {"title": "🌦️ الطقس", "payload": "CMD_WEATHER"},
+                {"title": "🕌 الصلاة", "payload": "CMD_PRAYER"},
+                {"title": "ℹ️ About", "payload": "CMD_ABOUT"},
+            ]
+        )
         return
 
-    if payload == "MENU_WEATHER":
-        user_state[sender_id] = {"mode": "weather_wait_city"}
-        send_message(sender_id, "🌦️ عطيلي اسم الولاية (عربي ولا انجليزي) مثال: وهران / Oran 😉")
-        return
-
-    if payload == "MENU_PRAYER":
-        user_state[sender_id] = {"mode": "prayer_wait_city"}
-        send_message(sender_id, "🕌 عطيلي اسم الولاية باش نجيب مواقيت الصلاة (مثال: الجزائر / Algiers) 😊")
-        return
-
-    if payload == "MENU_ABOUT":
+    if payload == "CMD_ABOUT":
         send_message(sender_id, about_text())
         return
 
-def process_message(sender_id, message_text):
+    if payload == "CMD_WEATHER":
+        user_state[sender_id] = {"mode": "weather_wait_city"}
+        send_message(sender_id, "🌦️ عطيني اسم المدينة/الولاية (عربي ولا إنجليزي)… مثال: Alger / Oran / Setif 😄")
+        return
+
+    if payload == "CMD_PRAYER":
+        user_state[sender_id] = {"mode": "prayer_wait_city"}
+        send_message(sender_id, "🕌 عطيني اسم الولاية بالإنجليزية باش يجيبها صح (مثال: Algiers / Oran / Annaba) 😉")
+        return
+
+def handle_message(sender_id, message_text):
     try:
         if not message_text:
             send_message(sender_id, "بعتلي كتابة برك باش نجاوبك 😄✍️")
             return
 
-        # حالات خاصة
-        if message_text.startswith("__POSTBACK__:"):
-            payload = message_text.split(":", 1)[1]
-            handle_postback(sender_id, payload)
-            return
+        txt = message_text.strip()
 
-        # طلب مطور
-        if "شكون طورك" in message_text:
+        # سؤال المطور
+        if "شكون طورك" in txt:
             send_message(sender_id, "طورني فارس 🇩🇿 شاب جزائري خطير و نفتخر بيه 🔥")
             return
 
-        # إذا راه يستنى ولاية
-        st = user_state.get(sender_id, {}).get("mode")
-        if st == "weather_wait_city":
-            w = resolve_wilaya(message_text) or message_text.strip()
+        # إذا راه مستني مدينة للطقس/الصلاة
+        mode = (user_state.get(sender_id) or {}).get("mode")
+
+        if mode == "weather_wait_city":
             user_state.pop(sender_id, None)
-            wx = get_weather_5days(w)
-            send_message(sender_id, wx or "ما لقيتش هذي الولاية 😅 جرّب: Oran / وهران")
+            send_typing(sender_id, "typing_on")
+            reply = weather_5days(txt)
+            send_typing(sender_id, "typing_off")
+            send_message(sender_id, reply)
             return
 
-        if st == "prayer_wait_city":
-            w = resolve_wilaya(message_text) or message_text.strip()
+        if mode == "prayer_wait_city":
             user_state.pop(sender_id, None)
-            pt = get_prayer_times(w)
-            send_message(sender_id, pt or "ما لقيتش هذي الولاية 😅 جرّب: Algiers / الجزائر")
+            send_typing(sender_id, "typing_on")
+            reply = prayer_times(txt)
+            send_typing(sender_id, "typing_off")
+            send_message(sender_id, reply)
             return
 
-        # رد سريع + typing
+        # أوامر نصية سريعة حتى بلا أزرار
+        low = txt.lower()
+        if low in ["طقس", "weather", "meteo"]:
+            handle_postback(sender_id, "CMD_WEATHER")
+            return
+        if low in ["صلاة", "اوقات الصلاة", "prayer", "adhan", "اذان"]:
+            handle_postback(sender_id, "CMD_PRAYER")
+            return
+        if low in ["about", "من انت", "من تكون", "تعريف"]:
+            handle_postback(sender_id, "CMD_ABOUT")
+            return
+
+        # الرد العام بالذكاء
         send_typing(sender_id, "typing_on")
-        # reply AI
-        reply = get_ai_response(sender_id, message_text)
+        reply = get_ai_response(sender_id, txt)
         send_typing(sender_id, "typing_off")
         send_message(sender_id, reply)
 
     except Exception as e:
-        send_message(sender_id, "سمحلي صرا مشكل صغير 😅 عاود بعد لحظة.")
-        print("process_message error:", repr(e))
+        print("handle_message error:", repr(e))
 
-def worker_loop():
-    while True:
-        sender_id, text = jobs.get()
-        try:
-            process_message(sender_id, text)
-        finally:
-            jobs.task_done()
-
-threading.Thread(target=worker_loop, daemon=True).start()
-
+# ---------------------------
+# Webhook verify + receive
+# ---------------------------
 @app.route("/", methods=["GET"])
 def verify():
     token = request.args.get("hub.verify_token")
@@ -329,18 +371,24 @@ def webhook():
             if not sender_id:
                 continue
 
-            postback = messaging.get("postback") or {}
-            if postback.get("payload"):
-                payload = postback["payload"]
-                if not jobs.full():
-                    jobs.put((sender_id, f"__POSTBACK__:{payload}"))
+            # ✅ postback (زر menu / get started)
+            if "postback" in messaging:
+                payload = (messaging.get("postback") or {}).get("payload")
+                if payload:
+                    threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
+            # ✅ quick reply payload
             msg_obj = messaging.get("message") or {}
-            message_text = (msg_obj.get("text") or "").strip()
+            if msg_obj.get("quick_reply"):
+                payload = msg_obj["quick_reply"].get("payload")
+                if payload:
+                    threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
+                continue
 
-            if not jobs.full():
-                jobs.put((sender_id, message_text))
+            # ✅ text message
+            message_text = (msg_obj.get("text") or "").strip()
+            threading.Thread(target=handle_message, args=(sender_id, message_text), daemon=True).start()
 
     return "OK", 200
 
