@@ -2,6 +2,8 @@ import os
 import time
 import threading
 import requests
+import datetime
+import math
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -20,8 +22,7 @@ session.headers.update({
 })
 
 # ---------------------------
-# 58 ولاية (عربي/إنجليزي) + مدينة مرجعية للصلاة
-# ملاحظة: للطقس والصلاة نحتاج "مدينة" معروفة في API
+# 58 ولاية (عربي/إنجليزي) + مدينة مرجعية للصلاة/الطقس
 # ---------------------------
 WILAYAS = [
     ("أدرار","Adrar","Adrar"),
@@ -84,36 +85,26 @@ WILAYAS = [
     ("المنيعة","El Meniaa","El Meniaa"),
 ]
 
-# نبني قاموسات بحث سريع
 W_BY_AR = {a: {"ar": a, "en": e, "city": c} for a, e, c in WILAYAS}
 W_BY_EN = {e.lower(): {"ar": a, "en": e, "city": c} for a, e, c in WILAYAS}
 
 def normalize_name(s: str) -> str:
     s = (s or "").strip()
-    # تنظيف بسيط
     s = s.replace("ولاية", "").strip()
     return s
 
 def resolve_wilaya(user_text: str):
-    """
-    يرجّع dict فيها: ar/en/city
-    يقبل عربي أو إنجليزي
-    """
     name = normalize_name(user_text)
     if not name:
         return None
 
-    # عربي مباشر
     if name in W_BY_AR:
         return W_BY_AR[name]
 
-    # إنجليزي (lower)
     low = name.lower()
     if low in W_BY_EN:
         return W_BY_EN[low]
 
-    # محاولات بسيطة (بدون تعقيد)
-    # مثال: "Alger" => نربطها بـ Algiers
     if low in ["alger", "alg", "algiers city"]:
         return W_BY_EN.get("algiers")
     if low in ["oran city"]:
@@ -167,10 +158,6 @@ def send_message(recipient_id, text):
     fb_post("/me/messages", payload, timeout=20)
 
 def send_quick_replies(recipient_id, text, replies):
-    """
-    quick replies يبانوا تحت الرسالة بصح يروحو كي تختار واحد
-    replies = [{"title":"🌦️ الطقس","payload":"CMD_WEATHER"}, ...]
-    """
     payload = {
         "recipient": {"id": recipient_id},
         "message": {
@@ -189,15 +176,11 @@ def send_quick_replies(recipient_id, text, replies):
 def setup_messenger_profile():
     profile_payload = {
         "get_started": {"payload": "GET_STARTED"},
-
-        # ✅ Ice Breakers (يبانو في بداية الشات كيما صورتك)
         "ice_breakers": [
             {"question": "🌦️ الطقس", "payload": "CMD_WEATHER"},
             {"question": "🕌 أوقات الصلاة", "payload": "CMD_PRAYER"},
             {"question": "ℹ️ About Botivity", "payload": "CMD_ABOUT"},
         ],
-
-        # ✅ Persistent Menu (ثابت في ☰)
         "persistent_menu": [
             {
                 "locale": "default",
@@ -257,27 +240,70 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ Weather + ✅ Prayer
+# ✅ Weather (5 أيام + 24 ساعة) + ✅ Prayer
 # ---------------------------
 AR_DAYS = ["الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"]
 
+AR_WIND_DIR = [
+    "شمال ⬆️", "شمال-شرق ↗️", "شرق ➡️", "جنوب-شرق ↘️",
+    "جنوب ⬇️", "جنوب-غرب ↙️", "غرب ⬅️", "شمال-غرب ↖️"
+]
+
+def wind_dir(deg):
+    try:
+        deg = float(deg)
+        ix = int((deg + 22.5) // 45) % 8
+        return AR_WIND_DIR[ix]
+    except:
+        return "—"
+
+def fmt_num(x, suffix=""):
+    try:
+        if x is None:
+            return "—"
+        if isinstance(x, (int, float)):
+            if float(x).is_integer():
+                return f"{int(x)}{suffix}"
+            return f"{x:.1f}{suffix}"
+        return f"{x}{suffix}"
+    except:
+        return "—"
+
+def wx_emoji(temp, pop):
+    try:
+        pop = float(pop)
+        temp = float(temp)
+    except:
+        return "☁️"
+    if pop >= 70:
+        return "⛈️"
+    if pop >= 40:
+        return "🌧️"
+    if pop >= 20:
+        return "🌦️"
+    if temp >= 28:
+        return "🔥☀️"
+    return "☀️"
+
 def day_name_from_date(date_str: str) -> str:
-    # date_str = "YYYY-MM-DD"
     try:
         y, m, d = date_str.split("-")
-        import datetime
         dt = datetime.date(int(y), int(m), int(d))
-        # Monday=0
         return AR_DAYS[dt.weekday()]
     except:
         return date_str
+
+def hour_label(iso_time: str) -> str:
+    try:
+        return iso_time.split("T")[1][:5]
+    except:
+        return iso_time
 
 def weather_5days(wilaya_input: str) -> str:
     w = resolve_wilaya(wilaya_input)
     if not w:
         return "🌦️ عطيني اسم الولاية صح (عربي ولا إنجليزي).\nمثال: الجزائر / Algiers — وهران / Oran 😄"
 
-    # Open-Meteo geocoding (نستعمل الاسم بالإنجليزية باش يلقاه)
     city = w["city"]
     geo = requests.get(
         "https://geocoding-api.open-meteo.com/v1/search",
@@ -296,7 +322,7 @@ def weather_5days(wilaya_input: str) -> str:
         params={
             "latitude": lat,
             "longitude": lon,
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max",
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max,winddirection_10m_dominant",
             "forecast_days": 5,
             "timezone": "auto"
         },
@@ -307,29 +333,105 @@ def weather_5days(wilaya_input: str) -> str:
     dates = d.get("time", [])
     tmax = d.get("temperature_2m_max", [])
     tmin = d.get("temperature_2m_min", [])
-    pop = d.get("precipitation_probability_max", [])
+    pop  = d.get("precipitation_probability_max", [])
     wind = d.get("windspeed_10m_max", [])
+    wdir = d.get("winddirection_10m_dominant", [])
 
-    lines = [f"🌦️ طقس 5 أيام — {w['ar']} ({w['en']}):"]
+    lines = []
+    lines.append(f"📅 **طقس 5 أيام** — {w['ar']} ({w['en']})")
+    lines.append("━━━━━━━━━━━━━━")
+
     for i in range(min(5, len(dates))):
-        p = pop[i] if i < len(pop) else 0
-        wv = wind[i] if i < len(wind) else 0
-        mn = tmin[i] if i < len(tmin) else "-"
-        mx = tmax[i] if i < len(tmax) else "-"
-
-        if p >= 70:
-            emoji = "⛈️"
-        elif p >= 40:
-            emoji = "🌧️"
-        elif p >= 20:
-            emoji = "🌦️"
-        else:
-            emoji = "☀️"
-
         day_ar = day_name_from_date(dates[i])
-        lines.append(f"- {day_ar}: {emoji} {mn}° / {mx}° | 💨 {wv} كم/س | 🌧️ {p}%")
+        mx = tmax[i] if i < len(tmax) else None
+        mn = tmin[i] if i < len(tmin) else None
+        p  = pop[i]  if i < len(pop)  else 0
+        ws = wind[i] if i < len(wind) else None
+        wd = wdir[i] if i < len(wdir) else None
 
-    lines.append("\nإذا تحب ولاية أخرى قولّي اسمها 😉")
+        emo = wx_emoji(mx if mx is not None else 20, p)
+
+        lines.append(
+            f"✅ {day_ar}\n"
+            f"{emo} حرارة: {fmt_num(mn,'°')} ↔ {fmt_num(mx,'°')}\n"
+            f"🌧️ احتمال مطر: {fmt_num(p,'%')}\n"
+            f"💨 رياح: {fmt_num(ws,' كم/س')} | {wind_dir(wd)}"
+        )
+        lines.append("━━━━━━━━━━━━━━")
+
+    lines.append("إذا تحب **⏰ 24 ساعة** قولّي: 24 ساعة 😉")
+    return "\n".join(lines)
+
+def weather_24h(wilaya_input: str) -> str:
+    w = resolve_wilaya(wilaya_input)
+    if not w:
+        return "⏰ عطيني اسم الولاية صح (عربي ولا إنجليزي).\nمثال: جيجل / Jijel 😄"
+
+    city = w["city"]
+    geo = requests.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1, "language": "en", "format": "json"},
+        timeout=12
+    ).json()
+
+    if not geo.get("results"):
+        return f"ما لقيتش {w['ar']} 😅 جرّب بالإنجليزية: {w['en']}"
+
+    r0 = geo["results"][0]
+    lat, lon = r0["latitude"], r0["longitude"]
+
+    fc = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "temperature_2m,relative_humidity_2m,precipitation_probability,windspeed_10m,winddirection_10m",
+            "forecast_days": 2,
+            "timezone": "auto"
+        },
+        timeout=15
+    ).json()
+
+    h = fc.get("hourly", {})
+    times = h.get("time", [])
+    temp  = h.get("temperature_2m", [])
+    hum   = h.get("relative_humidity_2m", [])
+    pop   = h.get("precipitation_probability", [])
+    wind  = h.get("windspeed_10m", [])
+    wdir  = h.get("winddirection_10m", [])
+
+    if not times:
+        return "⏰ ما قدرتش نجيب طقس 24 ساعة 😅"
+
+    lines = []
+    lines.append(f"⏰ **طقس 24 ساعة** — {w['ar']} ({w['en']})")
+    lines.append("━━━━━━━━━━━━━━")
+
+    step = 3  # كل 3 ساعات
+    shown = 0
+
+    for i in range(0, min(len(times), 24), step):
+        tlabel = hour_label(times[i])
+        te = temp[i] if i < len(temp) else None
+        hu = hum[i]  if i < len(hum)  else None
+        pp = pop[i]  if i < len(pop)  else 0
+        ws = wind[i] if i < len(wind) else None
+        wd = wdir[i] if i < len(wdir) else None
+
+        emo = wx_emoji(te if te is not None else 20, pp)
+
+        lines.append(
+            f"🕒 {tlabel}\n"
+            f"{emo} {fmt_num(te,'°')} | 💧 رطوبة: {fmt_num(hu,'%')}\n"
+            f"🌧️ مطر: {fmt_num(pp,'%')} | 💨 {fmt_num(ws,' كم/س')} {wind_dir(wd)}"
+        )
+        lines.append("━━━━━━━━━━━━━━")
+
+        shown += 1
+        if shown >= 8:
+            break
+
+    lines.append("إذا تحب **📅 5 أيام** قولّي: 5 أيام 😉")
     return "\n".join(lines)
 
 def prayer_times(wilaya_input: str) -> str:
@@ -338,7 +440,6 @@ def prayer_times(wilaya_input: str) -> str:
         return "🕌 عطيني اسم الولاية صح (عربي ولا إنجليزي).\nمثال: قسنطينة / Constantine 😄"
 
     city = w["city"]
-    # AlAdhan by city
     data = requests.get(
         "https://api.aladhan.com/v1/timingsByCity",
         params={"city": city, "country": "Algeria", "method": 3},
@@ -408,7 +509,6 @@ def get_ai_response(user_id, message_text):
 # ✅ معالجة الأزرار (postbacks) + الأوامر
 # ---------------------------
 def show_main_options(sender_id, text="وش تحب دير؟ 😄"):
-    # هذي Quick Replies (يروحو كي تختار) بصح يعاونو بزاف
     send_quick_replies(
         sender_id,
         text,
@@ -428,9 +528,26 @@ def handle_postback(sender_id, payload):
         send_message(sender_id, about_text())
         return
 
+    # ✅ الطقس: اختيار 24h ولا 5d
     if payload == "CMD_WEATHER":
-        user_state[sender_id] = {"mode": "weather_wait_wilaya"}
-        send_message(sender_id, "🌦️ عطيني اسم الولاية (عربي ولا إنجليزي)… مثال: الجزائر / Algiers 😄")
+        send_quick_replies(
+            sender_id,
+            "🌦️ تحب الطقس كيفاش؟",
+            [
+                {"title": "⏰ 24 ساعة", "payload": "CMD_WEATHER_24H"},
+                {"title": "📅 5 أيام", "payload": "CMD_WEATHER_5D"},
+            ]
+        )
+        return
+
+    if payload == "CMD_WEATHER_24H":
+        user_state[sender_id] = {"mode": "weather24_wait_wilaya"}
+        send_message(sender_id, "⏰ عطيني اسم الولاية (عربي ولا إنجليزي)… مثال: جيجل / Jijel 😄")
+        return
+
+    if payload == "CMD_WEATHER_5D":
+        user_state[sender_id] = {"mode": "weather5_wait_wilaya"}
+        send_message(sender_id, "📅 عطيني اسم الولاية (عربي ولا إنجليزي)… مثال: الجزائر / Algiers 😄")
         return
 
     if payload == "CMD_PRAYER":
@@ -450,10 +567,18 @@ def handle_message(sender_id, message_text):
             send_message(sender_id, "طورني فارس 🇩🇿 شاب جزائري خطير و نفتخر بيه 🔥")
             return
 
-        # إذا راه مستني ولاية للطقس/الصلاة
         mode = (user_state.get(sender_id) or {}).get("mode")
 
-        if mode == "weather_wait_wilaya":
+        if mode == "weather24_wait_wilaya":
+            user_state.pop(sender_id, None)
+            send_typing(sender_id, "typing_on")
+            reply = weather_24h(txt)
+            send_typing(sender_id, "typing_off")
+            send_message(sender_id, reply)
+            show_main_options(sender_id, "تحب تدير حاجة أخرى؟ 😉")
+            return
+
+        if mode == "weather5_wait_wilaya":
             user_state.pop(sender_id, None)
             send_typing(sender_id, "typing_on")
             reply = weather_5days(txt)
@@ -471,14 +596,25 @@ def handle_message(sender_id, message_text):
             show_main_options(sender_id, "نزيد نعاونك فحاجة أخرى؟ 😄")
             return
 
-        # أوامر نصية سريعة
         low = txt.lower()
+
+        # أوامر نصية
         if low in ["طقس", "weather", "meteo", "مناخ"]:
             handle_postback(sender_id, "CMD_WEATHER")
             return
+
+        if low in ["24", "24h", "24 ساعة", "طقس 24", "طقس 24 ساعة"]:
+            handle_postback(sender_id, "CMD_WEATHER_24H")
+            return
+
+        if low in ["5", "5 ايام", "5 أيام", "طقس 5", "طقس 5 أيام"]:
+            handle_postback(sender_id, "CMD_WEATHER_5D")
+            return
+
         if low in ["صلاة", "اوقات الصلاة", "أوقات الصلاة", "prayer", "adhan", "اذان", "آذان"]:
             handle_postback(sender_id, "CMD_PRAYER")
             return
+
         if low in ["about", "من انت", "من تكون", "تعريف", "شنو هو botivity", "botivity"]:
             handle_postback(sender_id, "CMD_ABOUT")
             return
@@ -488,8 +624,6 @@ def handle_message(sender_id, message_text):
         reply = get_ai_response(sender_id, txt)
         send_typing(sender_id, "typing_off")
         send_message(sender_id, reply)
-
-        # اختياري: خليه دايمًا يعاود يبين اختيارات
         show_main_options(sender_id, "حاب تزيد؟ 😄")
 
     except Exception as e:
@@ -518,14 +652,12 @@ def webhook():
             if not sender_id:
                 continue
 
-            # postback (menu / get started)
             if "postback" in messaging:
                 payload = (messaging.get("postback") or {}).get("payload")
                 if payload:
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
-            # quick reply payload
             msg_obj = messaging.get("message") or {}
             if msg_obj.get("quick_reply"):
                 payload = msg_obj["quick_reply"].get("payload")
@@ -533,7 +665,6 @@ def webhook():
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
-            # text message
             message_text = (msg_obj.get("text") or "").strip()
             threading.Thread(target=handle_message, args=(sender_id, message_text), daemon=True).start()
 
