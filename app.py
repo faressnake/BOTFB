@@ -3,6 +3,7 @@ import time
 import threading
 import requests
 import datetime
+import base64
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -169,6 +170,30 @@ def send_quick_replies(recipient_id, text, replies):
     }
     fb_post("/me/messages", payload, timeout=20)
 
+# ✅ تقسيم النص إذا طويل بزاف (مسنجر يقدر يقص)
+def chunk_text(text: str, max_len: int = 1500):
+    t = (text or "").strip()
+    if not t:
+        return []
+    parts = []
+    while len(t) > max_len:
+        cut = t.rfind("\n", 0, max_len)
+        if cut < 500:
+            cut = max_len
+        parts.append(t[:cut].strip())
+        t = t[cut:].strip()
+    if t:
+        parts.append(t)
+    return parts
+
+def send_long_message(recipient_id, text):
+    parts = chunk_text(text, max_len=1500)
+    if not parts:
+        return
+    for p in parts:
+        send_message(recipient_id, p)
+        time.sleep(0.2)
+
 # ---------------------------
 # ✅ Setup (Get Started + Ice Breakers + Persistent Menu)
 # ---------------------------
@@ -237,6 +262,75 @@ def call_baithek_api(ctx, lang="ar"):
     if not result:
         raise ValueError("No reply in API response")
     return clean_reply(result)
+
+# ---------------------------
+# ✅ تحليل الصور (أكثر من صورة) + تقسيم الرد إذا طويل
+# ---------------------------
+def download_image_as_base64(image_url: str) -> str:
+    r = requests.get(image_url, timeout=30)
+    r.raise_for_status()
+    b64 = base64.b64encode(r.content).decode("utf-8")
+    return f"data:image/webp;base64,{b64}"
+
+def describe_image_base64(base64_url: str) -> str:
+    res = requests.post(
+        "https://imageprompt.org/api/ai/images/describe",
+        json={
+            "base64Url": base64_url,
+            "instruction": "detail",
+            "prompt": "",
+            "language": "ar"
+        },
+        timeout=60
+    )
+    if not res.ok:
+        raise Exception(f"describe_api_error {res.status_code} {(res.text or '')[:200]}")
+    data = res.json()
+    return (data.get("result") or "").strip()
+
+def handle_image_attachments(sender_id, attachments):
+    try:
+        imgs = []
+        for att in (attachments or []):
+            if (att or {}).get("type") == "image":
+                url = (((att.get("payload") or {}).get("url")) or "").strip()
+                if url:
+                    imgs.append(url)
+
+        if not imgs:
+            send_message(sender_id, "ما فهمتش الصورة 😅 جرّب ابعثها وحدها/واضحة.")
+            return
+
+        send_typing(sender_id, "typing_on")
+
+        # إذا صور بزاف نخدمهم وحدة بوحدة
+        for idx, img_url in enumerate(imgs, start=1):
+            try:
+                b64url = download_image_as_base64(img_url)
+                desc = describe_image_base64(b64url)
+                send_typing(sender_id, "typing_off")
+
+                if not desc:
+                    send_message(sender_id, f"🖼️ الصورة {idx}: ما قدرتش نحلّلها دوقا 😅")
+                else:
+                    header = f"🖼️ **تحليل الصورة {idx}/{len(imgs)}**\n━━━━━━━━━━━━━━\n"
+                    send_long_message(sender_id, header + desc)
+
+                send_typing(sender_id, "typing_on")
+                time.sleep(0.2)
+
+            except Exception as e:
+                print("image describe error:", repr(e))
+                send_typing(sender_id, "typing_off")
+                send_message(sender_id, f"🖼️ الصورة {idx}: صرا مشكل فـ التحليل 😅 جرّب بعد شوية.")
+                send_typing(sender_id, "typing_on")
+
+        send_typing(sender_id, "typing_off")
+
+    except Exception as e:
+        print("handle_image_attachments error:", repr(e))
+        send_typing(sender_id, "typing_off")
+        send_message(sender_id, "صرا مشكل فـ الصور 😅")
 
 # ---------------------------
 # ✅ Weather (5 أيام + 24 ساعة) + ✅ Prayer
@@ -380,7 +474,6 @@ def weather_24h(wilaya_input: str) -> str:
     r0 = geo["results"][0]
     lat, lon = r0["latitude"], r0["longitude"]
 
-    # ✅ هنا صلحناها: ما نستعملوش forecast_days=2 (ممكن يخلط)، نخليها default ويجيب 24 ساعة من الآن
     fc = requests.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
@@ -400,14 +493,13 @@ def weather_24h(wilaya_input: str) -> str:
     wind  = h.get("windspeed_10m", []) or []
     wdir  = h.get("winddirection_10m", []) or []
 
-    if len(times) < 2 or len(temp) < 2:
+    if len(times) < 8 or len(temp) < 8:
         return "⏰ ما قدرتش نجيب طقس 24 ساعة دوقا، عاود جرّب بعد شوية."
 
     lines = []
     lines.append(f"⏰ طقس 24 ساعة — {w['ar']} ({w['en']})")
     lines.append("━━━━━━━━━━━━━━")
 
-    # ✅ عرض احترافي: كل 3 ساعات (8 أسطر) = 24 ساعة
     step = 3
     shown = 0
 
@@ -454,18 +546,18 @@ def prayer_times(wilaya_input: str) -> str:
     t = data["data"]["timings"]
     return (
         f"🕌 أوقات الصلاة — {w['ar']} ({w['en']}):\n"
-        f"الفجر: {t.get('Fajr')}\n"
-        f"الظهر: {t.get('Dhuhr')}\n"
-        f"العصر: {t.get('Asr')}\n"
-        f"المغرب: {t.get('Maghrib')}\n"
-        f"العشاء: {t.get('Isha')}"
+        f"🌙 الفجر: {t.get('Fajr')}\n"
+        f"☀️ الظهر: {t.get('Dhuhr')}\n"
+        f"🏞️ العصر: {t.get('Asr')}\n"
+        f"🌇 المغرب: {t.get('Maghrib')}\n"
+        f"🌃 العشاء: {t.get('Isha')}"
     )
 
 def about_text():
     return (
         "ℹ️ Botivity\n"
-        "مساعد مسنجر جزائري خفيف ومرتاح.\n"
-        "يساعدك في أي موضوع + الطقس والصلاة.\n\n"
+        "مساعد مسنجر جزائري خفيف ومرتاح 😄\n"
+        "يعطيك مساعدات في أي موضوع + خدمات كيما الطقس 🌦️ والصلاة 🕌.\n\n"
         "✨ Smarter Conversations Start Here\n"
         "👨‍💻 By FaresCodeX 🇩🇿"
     )
@@ -477,13 +569,13 @@ def get_ai_response(user_id, message_text):
     if user_id not in user_memory:
         user_memory[user_id] = []
 
-    # ✅ نقصنا الإيموجيات وخففنا “السوري”
+    # ✅ خفيف + مرح شوية (بلا مبالغة)
     system_prompt = (
         "انت شاب جزائري دزيري 100%.\n"
-        "تهدر طبيعي كيما صاحب، بلا تمثيل وبلا مبالغة.\n"
+        "تهدر طبيعي كيما صاحب، خفيف الدم شوية بصح محترم.\n"
         "تعاون في أي موضوع.\n"
         "ردودك تكون على قد السؤال: القصير قصير، واللي يحتاج شرح نظمّو بنقاط.\n"
-        "الإيموجيات قليلة وخفيفة وبلا ما تكتر.\n"
+        "الإيموجيات قليلة وفي بلاصتها.\n"
         "إذا السؤال غامض اسقسي توضيح.\n"
         "مهم: ما تقولش بلي انت AI ولا روبوت ولا تذكر ذكاء اصطناعي.\n"
         "غير إذا تسقساوك شكون طورك قول: \"طورني فارس 🇩🇿\" فقط."
@@ -500,7 +592,7 @@ def get_ai_response(user_id, message_text):
             user_memory[user_id].append({"role": "user", "content": message_text})
             user_memory[user_id].append({"role": "assistant", "content": reply})
             user_memory[user_id] = user_memory[user_id][-16:]
-            return reply or "ما فهمتش مليح، عاود قولها بطريقة أخرى."
+            return reply or "ما فهمتش مليح، عاود قولها بطريقة أخرى 😄"
         except Exception as e:
             print("API error:", repr(e))
             time.sleep(0.5)
@@ -522,23 +614,21 @@ def show_main_options(sender_id, text="وش تحب دير؟"):
     )
 
 def dev_reply():
-    # ✅ مدح “شوية” لفارس (بدون مبالغة/سبام)
     return (
         "طورني فارس 🇩🇿\n"
-        "شاب يخدم بالنية ويعرف يركّب السيستام صح.\n"
-        "خدام وديما يطوّر المشروع باش يخرج حاجة محترمة."
+        "شاب يخدم بالنية ويحب يطلع حاجة مليحة.\n"
+        "ديما يطوّر المشروع باش يولي أقوى وأكثر احترافية 💪"
     )
 
 def handle_postback(sender_id, payload):
     if payload == "GET_STARTED":
-        show_main_options(sender_id, "أهلا بيك في Botivity")
+        show_main_options(sender_id, "أهلا بيك في Botivity 😄")
         return
 
     if payload == "CMD_ABOUT":
-        send_message(sender_id, about_text())
+        send_long_message(sender_id, about_text())
         return
 
-    # الطقس: اختيار 24h ولا 5d
     if payload == "CMD_WEATHER":
         send_quick_replies(
             sender_id,
@@ -568,15 +658,14 @@ def handle_postback(sender_id, payload):
 def handle_message(sender_id, message_text):
     try:
         if not message_text:
-            send_message(sender_id, "بعتلي كتابة باش نجاوبك.")
+            send_message(sender_id, "بعتلي كتابة باش نجاوبك 😄")
             return
 
         txt = message_text.strip()
         low = txt.lower()
 
-        # ✅ شكون طورك (مدح شوية)
         if "شكون طورك" in txt or "من طورك" in txt or "who made you" in low:
-            send_message(sender_id, dev_reply())
+            send_long_message(sender_id, dev_reply())
             return
 
         mode = (user_state.get(sender_id) or {}).get("mode")
@@ -586,7 +675,7 @@ def handle_message(sender_id, message_text):
             send_typing(sender_id, "typing_on")
             reply = weather_24h(txt)
             send_typing(sender_id, "typing_off")
-            send_message(sender_id, reply)
+            send_long_message(sender_id, reply)
             return
 
         if mode == "weather5_wait_wilaya":
@@ -594,7 +683,7 @@ def handle_message(sender_id, message_text):
             send_typing(sender_id, "typing_on")
             reply = weather_5days(txt)
             send_typing(sender_id, "typing_off")
-            send_message(sender_id, reply)
+            send_long_message(sender_id, reply)
             return
 
         if mode == "prayer_wait_wilaya":
@@ -602,10 +691,9 @@ def handle_message(sender_id, message_text):
             send_typing(sender_id, "typing_on")
             reply = prayer_times(txt)
             send_typing(sender_id, "typing_off")
-            send_message(sender_id, reply)
+            send_long_message(sender_id, reply)
             return
 
-        # أوامر نصية
         if low in ["طقس", "weather", "meteo", "مناخ"]:
             handle_postback(sender_id, "CMD_WEATHER")
             return
@@ -626,13 +714,10 @@ def handle_message(sender_id, message_text):
             handle_postback(sender_id, "CMD_ABOUT")
             return
 
-        # الرد العام
         send_typing(sender_id, "typing_on")
         reply = get_ai_response(sender_id, txt)
         send_typing(sender_id, "typing_off")
-        send_message(sender_id, reply)
-
-        # ✅ هنا نحيّنا show_main_options بعد كل رد باش مايبعثش رسالة ثانية
+        send_long_message(sender_id, reply)
 
     except Exception as e:
         print("handle_message error:", repr(e))
@@ -667,12 +752,25 @@ def webhook():
                 continue
 
             msg_obj = messaging.get("message") or {}
+
+            # ✅ quick reply payload
             if msg_obj.get("quick_reply"):
                 payload = msg_obj["quick_reply"].get("payload")
                 if payload:
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
+            # ✅ attachments (صور / ملفات)
+            attachments = msg_obj.get("attachments") or []
+            if attachments:
+                threading.Thread(
+                    target=handle_image_attachments,
+                    args=(sender_id, attachments),
+                    daemon=True
+                ).start()
+                continue
+
+            # ✅ text message
             message_text = (msg_obj.get("text") or "").strip()
             threading.Thread(target=handle_message, args=(sender_id, message_text), daemon=True).start()
 
