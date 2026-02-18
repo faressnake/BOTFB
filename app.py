@@ -4,6 +4,7 @@ import threading
 import requests
 import datetime
 import base64
+import json
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -12,8 +13,8 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
 
-# ✅ Image Generator API (خليها ENV باش تبدلها وقت تحب)
-IMAGE_GEN_URL = os.getenv("IMAGE_GEN_URL", "https://aifreeforever.com/api/generate-image")
+# ✅ Image Generator API (خليها ENV باش تبدلها وقت تحب)  (خليتها كيما هي)
+IMAGE_GEN_URL = os.getenv("IMAGE_GEN_URL", "https://magicphotos.com/api/generate-art")
 
 user_memory = {}
 user_state = {}  # {user_id: {"mode":"weather_wait_wilaya"} ...}
@@ -282,56 +283,56 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ توليد صورة من وصف (Image Generator)
+# ✅ توليد صورة من وصف (MAGICPHOTOS) + إرسالها لمسنجر (attachment upload)
 # ---------------------------
-def generate_image(prompt: str) -> str:
-    """
-    يرجّع رابط صورة (https)
-    لازم الـ API يرجّع imageUrl أو images[0]
-    """
+def generate_image_bytes_magicphotos(prompt: str) -> bytes:
     p = (prompt or "").strip()
     if not p:
         raise ValueError("empty prompt")
 
+    r = requests.post(
+        "https://magicphotos.com/api/generate-art",
+        json={"prompt": p, "userProfile": {}},
+        headers={"content-type": "application/json", "user-agent": "Mozilla/5.0"},
+        timeout=120
+    )
+    if not r.ok:
+        raise Exception(f"magicphotos_error {r.status_code} {(r.text or '')[:200]}")
+    return r.content  # png bytes
+
+
+def fb_upload_image_bytes(image_bytes: bytes, timeout=60) -> str:
+    if not PAGE_ACCESS_TOKEN:
+        raise Exception("PAGE_ACCESS_TOKEN ناقص")
+
+    url = "https://graph.facebook.com/v18.0/me/message_attachments"
+
+    files = {"filedata": ("image.png", image_bytes, "image/png")}
+    data = {
+        "message": json.dumps({
+            "attachment": {"type": "image", "payload": {"is_reusable": True}}
+        })
+    }
+
+    r = requests.post(url, params={"access_token": PAGE_ACCESS_TOKEN}, files=files, data=data, timeout=timeout)
+    if not r.ok:
+        raise Exception(f"fb_upload_error {r.status_code} {(r.text or '')[:200]}")
+    return (r.json() or {}).get("attachment_id")
+
+
+def send_image_attachment_id(recipient_id, attachment_id, caption=None):
     payload = {
-        "prompt": p,
-        "resolution": "1024 × 1024 (Square)",
-        "speed_mode": "Unsqueezed 🍋 (highest quality)",
-        "output_format": "webp",
-        "output_quality": 100,
-        "seed": -1,
-        "model_type": "fast"
+        "recipient": {"id": recipient_id},
+        "message": {
+            "attachment": {
+                "type": "image",
+                "payload": {"attachment_id": attachment_id}
+            }
+        }
     }
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Origin": "https://aifreeforever.com",
-        "Referer": "https://aifreeforever.com/image-generators",
-    }
-
-    r = requests.post(IMAGE_GEN_URL, json=payload, headers=headers, timeout=90)
-    r.raise_for_status()
-    data = r.json() if "application/json" in (r.headers.get("content-type","")) else {}
-
-    url = None
-    if isinstance(data, dict):
-        if data.get("images") and isinstance(data["images"], list):
-            url = data["images"][0]
-        if not url and data.get("imageUrl"):
-            url = data["imageUrl"]
-
-    if not url:
-        # fallback: حاول تفسر النص
-        txt = (r.text or "").strip()
-        if "http" in txt:
-            url = txt
-
-    if not url or not str(url).startswith("http"):
-        raise ValueError("no image url returned")
-
-    return url
+    fb_post("/me/messages", payload, timeout=30)
+    if caption:
+        send_message(recipient_id, caption)
 
 # ---------------------------
 # ✅ تحليل الصور (أكثر من صورة) + تقسيم الرد إذا طويل
@@ -635,7 +636,6 @@ def get_ai_response(user_id, message_text):
     if user_id not in user_memory:
         user_memory[user_id] = []
 
-    
     system_prompt = ( """
 أنت "Botivity" — شاب جزائري 100%، تهدر بدزيري مفهومة (فصحى مبسطة مع لمسة دزايرية) كيما صاحب قريب، ذكي وتفهم المشاعر.
 
@@ -709,7 +709,8 @@ def get_ai_response(user_id, message_text):
 2) "يا عزيز قلبي ربي يحفظك ✨❤️ هات واش راه في بالك؟"
 3) "ههههه انت خطير 😂❤️ بصح ما تهربش… وش السؤال تاعك؟"
 4) "نحبك حتى أنا بطريقتي 😄❤️ نهار تحتاجني تلقاني، قولّي برك."
-""") 
+""")
+
     hist = user_memory[user_id][-8:]
     ctx = [{"role": "system", "content": system_prompt}]
     ctx.extend(hist)
@@ -834,9 +835,13 @@ def handle_message(sender_id, message_text):
             user_state.pop(sender_id, None)
             send_typing(sender_id, "typing_on")
             try:
-                img_url = generate_image(txt)
+                img_bytes = generate_image_bytes_magicphotos(txt)
+                attachment_id = fb_upload_image_bytes(img_bytes)
                 send_typing(sender_id, "typing_off")
-                send_image_url(sender_id, img_url, caption="✅ ها هي الصورة تاعك 🎨")
+                if attachment_id:
+                    send_image_attachment_id(sender_id, attachment_id, caption="✅ ها هي الصورة تاعك 🎨")
+                else:
+                    send_message(sender_id, "🎨 صرا مشكل فـ رفع الصورة 😅 جرّب بعد شوية.")
             except Exception as e:
                 print("generate_image error:", repr(e))
                 send_typing(sender_id, "typing_off")
@@ -871,20 +876,23 @@ def handle_message(sender_id, message_text):
             prompt = prompt.replace("ولدلي صورة", "").replace("ديرلي صورة", "").strip()
             if prompt.lower().startswith("صورة"):
                 prompt = prompt[4:].strip()
-            user_state[sender_id] = {"mode": "image_wait_prompt"}
+
             if prompt:
-                # نخدمها مباشرة بدون سؤال ثاني
-                user_state.pop(sender_id, None)
                 send_typing(sender_id, "typing_on")
                 try:
-                    img_url = generate_image(prompt)
+                    img_bytes = generate_image_bytes_magicphotos(prompt)
+                    attachment_id = fb_upload_image_bytes(img_bytes)
                     send_typing(sender_id, "typing_off")
-                    send_image_url(sender_id, img_url, caption="✅ ها هي الصورة تاعك 🎨")
+                    if attachment_id:
+                        send_image_attachment_id(sender_id, attachment_id, caption="✅ ها هي الصورة تاعك 🎨")
+                    else:
+                        send_message(sender_id, "🎨 صرا مشكل فـ رفع الصورة 😅 جرّب بعد شوية.")
                 except Exception as e:
                     print("generate_image error:", repr(e))
                     send_typing(sender_id, "typing_off")
                     send_message(sender_id, "🎨 ما قدرتش نولّد الصورة دوقا 😅 جرّب وصف آخر ولا عاود بعد شوية.")
             else:
+                user_state[sender_id] = {"mode": "image_wait_prompt"}
                 send_message(sender_id, "🎨 عطيني وصف للصورة باش نولّدها (مثال: منظر ليلي فوق البحر) 😄")
             return
 
