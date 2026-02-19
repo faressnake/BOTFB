@@ -13,11 +13,16 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
 
-# ✅ Image Generator API (خليها ENV باش تبدلها وقت تحب)  (خليتها كيما هي)
-IMAGE_GEN_URL = os.getenv("IMAGE_GEN_URL", "https://magicphotos.com/api/generate-art")
+# ✅ Nano Banana (Text-to-Image + Edit)
+NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "http://apo-fares.abrdns.com/nano-banana.php")
+
+# ✅ Gemini Vision
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 user_memory = {}
-user_state = {}  # {user_id: {"mode":"weather_wait_wilaya"} ...}
+user_state = {}      # {user_id: {"mode":"..."} ...}
+pending_images = {}  # ✅ نخزنو آخر صور استلمناها مؤقتا: {user_id: {"urls":[...], "ts": time.time()}}
 
 session = requests.Session()
 session.headers.update({
@@ -88,7 +93,6 @@ WILAYAS = [
     ("المغير","El M'Ghair","El M'Ghair"),
     ("المنيعة","El Meniaa","El Meniaa"),
 ]
-
 W_BY_AR = {a: {"ar": a, "en": e, "city": c} for a, e, c in WILAYAS}
 W_BY_EN = {e.lower(): {"ar": a, "en": e, "city": c} for a, e, c in WILAYAS}
 
@@ -101,19 +105,15 @@ def resolve_wilaya(user_text: str):
     name = normalize_name(user_text)
     if not name:
         return None
-
     if name in W_BY_AR:
         return W_BY_AR[name]
-
     low = name.lower()
     if low in W_BY_EN:
         return W_BY_EN[low]
-
     if low in ["alger", "alg", "algiers city"]:
         return W_BY_EN.get("algiers")
     if low in ["oran city"]:
         return W_BY_EN.get("oran")
-
     return None
 
 # ---------------------------
@@ -174,21 +174,6 @@ def send_quick_replies(recipient_id, text, replies):
     }
     fb_post("/me/messages", payload, timeout=20)
 
-def send_image_url(recipient_id, image_url, caption=None):
-    # Messenger يحتاج url public https
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {
-            "attachment": {
-                "type": "image",
-                "payload": {"url": image_url, "is_reusable": True}
-            }
-        }
-    }
-    fb_post("/me/messages", payload, timeout=30)
-    if caption:
-        send_message(recipient_id, caption)
-
 # ✅ تقسيم النص إذا طويل بزاف
 def chunk_text(text: str, max_len: int = 1500):
     t = (text or "").strip()
@@ -211,6 +196,38 @@ def send_long_message(recipient_id, text):
         send_message(recipient_id, p)
         time.sleep(0.2)
 
+# ✅ رفع صورة لفايسبوك وإرسالها كصورة (مش رابط)
+def fb_upload_image_bytes(image_bytes: bytes, timeout=60) -> str:
+    if not PAGE_ACCESS_TOKEN:
+        raise Exception("PAGE_ACCESS_TOKEN ناقص")
+
+    url = "https://graph.facebook.com/v18.0/me/message_attachments"
+    files = {"filedata": ("image.png", image_bytes, "image/png")}
+    data = {
+        "message": json.dumps({
+            "attachment": {"type": "image", "payload": {"is_reusable": True}}
+        })
+    }
+
+    r = requests.post(url, params={"access_token": PAGE_ACCESS_TOKEN}, files=files, data=data, timeout=timeout)
+    if not r.ok:
+        raise Exception(f"fb_upload_error {r.status_code} {(r.text or '')[:200]}")
+    return (r.json() or {}).get("attachment_id")
+
+def send_image_attachment_id(recipient_id, attachment_id, caption=None):
+    payload = {
+        "recipient": {"id": recipient_id},
+        "message": {
+            "attachment": {
+                "type": "image",
+                "payload": {"attachment_id": attachment_id}
+            }
+        }
+    }
+    fb_post("/me/messages", payload, timeout=30)
+    if caption:
+        send_message(recipient_id, caption)
+
 # ---------------------------
 # ✅ Setup (Get Started + Ice Breakers + Persistent Menu)
 # ---------------------------
@@ -221,6 +238,7 @@ def setup_messenger_profile():
             {"question": "🌦️ الطقس", "payload": "CMD_WEATHER"},
             {"question": "🕌 أوقات الصلاة", "payload": "CMD_PRAYER"},
             {"question": "🎨 توليد صورة", "payload": "CMD_IMAGE"},
+            {"question": "🖼️ حل صورة/موضوع", "payload": "CMD_VISION"},
             {"question": "ℹ️ About Botivity", "payload": "CMD_ABOUT"},
         ],
         "persistent_menu": [
@@ -231,6 +249,7 @@ def setup_messenger_profile():
                     {"type": "postback", "title": "🌦️ الطقس", "payload": "CMD_WEATHER"},
                     {"type": "postback", "title": "🕌 الصلاة", "payload": "CMD_PRAYER"},
                     {"type": "postback", "title": "🎨 صورة", "payload": "CMD_IMAGE"},
+                    {"type": "postback", "title": "🖼️ حل صورة", "payload": "CMD_VISION"},
                     {"type": "postback", "title": "ℹ️ About", "payload": "CMD_ABOUT"},
                 ]
             }
@@ -259,7 +278,7 @@ def clean_reply(text: str) -> str:
     return t.strip()
 
 # ---------------------------
-# استدعاء API تاعك
+# استدعاء API تاعك (الشات العادي)
 # ---------------------------
 def call_baithek_api(ctx, lang="ar"):
     payload = {"name": "Usama", "lang": lang, "messages": ctx, "n": 1, "stream": False}
@@ -283,124 +302,104 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ توليد صورة من وصف (MAGICPHOTOS) + إرسالها لمسنجر (attachment upload)
+# ✅ Nano Banana - توليد صورة بدقة (ونبعثها كصورة في الشات)
 # ---------------------------
-def generate_image_bytes_magicphotos(prompt: str) -> bytes:
-    p = (prompt or "").strip()
+def _tight_prompt(user_prompt: str) -> str:
+    # باش نقللو العشوائية: نخلي الوصف “محدد”
+    p = (user_prompt or "").strip()
+    if not p:
+        return ""
+    # Template بسيط يخلي النتيجة أقرب للوصف
+    return (
+        f"{p}\n"
+        "Requirements: follow the description exactly, no extra objects, no random text, high quality, sharp details."
+    )
+
+def nano_banana_create_image_bytes(prompt: str) -> bytes:
+    if not NANO_BANANA_URL:
+        raise Exception("NANO_BANANA_URL ناقص")
+    p = _tight_prompt(prompt)
     if not p:
         raise ValueError("empty prompt")
 
+    # POST (كما شرحته)
     r = requests.post(
-        "https://magicphotos.com/api/generate-art",
-        json={"prompt": p, "userProfile": {}},
-        headers={"content-type": "application/json", "user-agent": "Mozilla/5.0"},
+        NANO_BANANA_URL,
+        json={"mode": "create", "prompt": p},
         timeout=120
     )
     if not r.ok:
-        raise Exception(f"magicphotos_error {r.status_code} {(r.text or '')[:200]}")
-    return r.content  # png bytes
+        raise Exception(f"nano_banana_error {r.status_code} {(r.text or '')[:200]}")
 
+    data = r.json() if "application/json" in (r.headers.get("content-type") or "") else {}
+    if not data.get("success") or not data.get("url"):
+        raise Exception(f"nano_banana_bad_response {(r.text or '')[:200]}")
 
-def fb_upload_image_bytes(image_bytes: bytes, timeout=60) -> str:
-    if not PAGE_ACCESS_TOKEN:
-        raise Exception("PAGE_ACCESS_TOKEN ناقص")
-
-    url = "https://graph.facebook.com/v18.0/me/message_attachments"
-
-    files = {"filedata": ("image.png", image_bytes, "image/png")}
-    data = {
-        "message": json.dumps({
-            "attachment": {"type": "image", "payload": {"is_reusable": True}}
-        })
-    }
-
-    r = requests.post(url, params={"access_token": PAGE_ACCESS_TOKEN}, files=files, data=data, timeout=timeout)
-    if not r.ok:
-        raise Exception(f"fb_upload_error {r.status_code} {(r.text or '')[:200]}")
-    return (r.json() or {}).get("attachment_id")
-
-
-def send_image_attachment_id(recipient_id, attachment_id, caption=None):
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {
-            "attachment": {
-                "type": "image",
-                "payload": {"attachment_id": attachment_id}
-            }
-        }
-    }
-    fb_post("/me/messages", payload, timeout=30)
-    if caption:
-        send_message(recipient_id, caption)
+    img_url = data["url"]
+    img = requests.get(img_url, timeout=60)
+    img.raise_for_status()
+    return img.content
 
 # ---------------------------
-# ✅ تحليل الصور (أكثر من صورة) + تقسيم الرد إذا طويل
+# ✅ Gemini Vision - تحليل/حل مواضيع من الصور
 # ---------------------------
-def download_image_as_base64(image_url: str) -> str:
-    r = requests.get(image_url, timeout=30)
+def download_image_bytes(image_url: str) -> bytes:
+    r = requests.get(image_url, timeout=40)
     r.raise_for_status()
-    b64 = base64.b64encode(r.content).decode("utf-8")
-    return f"data:image/webp;base64,{b64}"
+    return r.content
 
-def describe_image_base64(base64_url: str) -> str:
-    res = requests.post(
-        "https://imageprompt.org/api/ai/images/describe",
-        json={
-            "base64Url": base64_url,
-            "instruction": "detail",
-            "prompt": "",
-            "language": "ar"
-        },
-        timeout=60
-    )
+def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
+    if not GEMINI_API_KEY:
+        return "لازم تحط GEMINI_API_KEY في Env باش نخدم Vision."
+
+    # Gemini generateContent
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    # Prompt دزيري + “حل مواضيع” مرتب
+    instruction = f"""
+راك Botivity شاب جزائري تهدر بدزيري مفهومة.
+المستخدم عطاك صورة فيها موضوع/تمرين/أسئلة/وثيقة/رسمة.
+
+المطلوب حسب كلام المستخدم:
+{user_intent}
+
+✅ قواعد الإجابة:
+- إذا كانت الصورة فيها أسئلة/تمارين: حلهم كامل خطوة بخطوة وبطريقة مرتبة ومقسمة (1/2/3).
+- إذا كانت فيها موضوع مكتوب: استخرج النص ثم جاوب/حل/اشرح.
+- إذا كانت رسمة/مخطط: فسّرها ببساطة وخرج الخلاصة.
+- إذا النص غير واضح: قول للمستخدم واش ناقص (صورة أوضح/قريبة).
+- في الأخير دير: "📌 الخلاصة" نقاط قصيرة.
+- ما تستعملش كلمات: AI / روبوت / نموذج لغوي / OpenAI.
+"""
+
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": instruction.strip()},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": b64
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    res = requests.post(endpoint, params={"key": GEMINI_API_KEY}, json=payload, timeout=90)
     if not res.ok:
-        raise Exception(f"describe_api_error {res.status_code} {(res.text or '')[:200]}")
-    data = res.json()
-    return (data.get("result") or "").strip()
+        return f"صرا مشكل مع Gemini Vision 😅 ({res.status_code})"
 
-def handle_image_attachments(sender_id, attachments):
+    data = res.json() or {}
     try:
-        imgs = []
-        for att in (attachments or []):
-            if (att or {}).get("type") == "image":
-                url = (((att.get("payload") or {}).get("url")) or "").strip()
-                if url:
-                    imgs.append(url)
-
-        if not imgs:
-            send_message(sender_id, "ما فهمتش الصورة 😅 جرّب ابعثها وحدها/واضحة.")
-            return
-
-        send_typing(sender_id, "typing_on")
-
-        for idx, img_url in enumerate(imgs, start=1):
-            try:
-                b64url = download_image_as_base64(img_url)
-                desc = describe_image_base64(b64url)
-                send_typing(sender_id, "typing_off")
-
-                if not desc:
-                    send_message(sender_id, f"🖼️ الصورة {idx}: ما قدرتش نحلّلها دوقا 😅")
-                else:
-                    header = f"🖼️ **تحليل الصورة {idx}/{len(imgs)}**\n━━━━━━━━━━━━━━\n"
-                    send_long_message(sender_id, header + desc)
-
-                send_typing(sender_id, "typing_on")
-                time.sleep(0.2)
-
-            except Exception as e:
-                print("image describe error:", repr(e))
-                send_typing(sender_id, "typing_off")
-                send_message(sender_id, f"🖼️ الصورة {idx}: صرا مشكل فـ التحليل 😅 جرّب بعد شوية.")
-                send_typing(sender_id, "typing_on")
-
-        send_typing(sender_id, "typing_off")
-
-    except Exception as e:
-        print("handle_image_attachments error:", repr(e))
-        send_typing(sender_id, "typing_off")
-        send_message(sender_id, "صرا مشكل فـ الصور 😅")
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return clean_reply(text)
+    except:
+        return "ما قدرتش نقرأ الرد تاع Vision دوقا 😅 جرّب عاود."
 
 # ---------------------------
 # ✅ Weather (5 أيام + 24 ساعة) + ✅ Prayer
@@ -624,13 +623,13 @@ def about_text():
     return (
         "ℹ️ Botivity\n"
         "مساعد مسنجر جزائري خفيف ومرتاح 😄\n"
-        "يعطيك مساعدات في أي موضوع + خدمات كيما الطقس 🌦️ والصلاة 🕌 + توليد صور 🎨.\n\n"
+        "يعطيك مساعدات في أي موضوع + خدمات كيما الطقس 🌦️ والصلاة 🕌 + توليد صور 🎨 + حل صور/مواضيع 🖼️.\n\n"
         "✨ Smarter Conversations Start Here\n"
         "👨‍💻 By FaresCodeX 🇩🇿"
     )
 
 # ---------------------------
-# الرد العام
+# الرد العام (System Prompt كما بعتهولك)
 # ---------------------------
 def get_ai_response(user_id, message_text):
     if user_id not in user_memory:
@@ -707,7 +706,7 @@ def get_ai_response(user_id, message_text):
 ✅ أمثلة ردود (بدّلهم كل مرة):
 1) "واش هذا الكلام الزين 😄❤️ راني فرحت بصح… قولّي وش نعاونك اليوم؟"
 2) "يا عزيز قلبي ربي يحفظك ✨❤️ هات واش راه في بالك؟"
-3) "ههههه انت خطير 😂❤️ بصح ما تهربش… وش السؤال تاعك؟"
+3) "ههههه انت خطير 😂❤️ بصح ما تهربش… وش السؤال تاعك؟ 😄"
 4) "نحبك حتى أنا بطريقتي 😄❤️ نهار تحتاجني تلقاني، قولّي برك."
 """)
 
@@ -740,6 +739,7 @@ def show_main_options(sender_id, text="وش تحب دير؟"):
             {"title": "🌦️ الطقس", "payload": "CMD_WEATHER"},
             {"title": "🕌 الصلاة", "payload": "CMD_PRAYER"},
             {"title": "🎨 صورة", "payload": "CMD_IMAGE"},
+            {"title": "🖼️ حل صورة", "payload": "CMD_VISION"},
             {"title": "ℹ️ About", "payload": "CMD_ABOUT"},
         ]
     )
@@ -786,12 +786,45 @@ def handle_postback(sender_id, payload):
         send_message(sender_id, "🕌 عطيني اسم الولاية (عربي ولا إنجليزي)")
         return
 
-    # ✅ Image generator
+    # ✅ Nano Banana image generator
     if payload == "CMD_IMAGE":
         user_state[sender_id] = {"mode": "image_wait_prompt"}
-        send_message(sender_id, "🎨 عطيني وصف للصورة (مثال: قط في الفضاء، ستايل سينمائي) 😄")
+        send_message(sender_id, "🎨 عطيني وصف للصورة (مثال: قطة في الفضاء ستايل سينمائي) 😄")
         return
 
+    # ✅ Vision command
+    if payload == "CMD_VISION":
+        user_state[sender_id] = {"mode": "vision_wait_image"}
+        send_message(sender_id, "🖼️ ابعثلي الصورة تاع الموضوع/التمرين، ومن بعد نقولك وش نقدر ندير بيها 😄")
+        return
+
+# ---------------------------
+# ✅ Vision flow (صورة -> سؤال نية -> حل)
+# ---------------------------
+VISION_CHOICES = [
+    {"title": "✅ حل الأسئلة", "payload": "V_INTENT_SOLVE"},
+    {"title": "📝 استخراج النص", "payload": "V_INTENT_OCR"},
+    {"title": "🔍 حللي وش تشوف", "payload": "V_INTENT_AUTO"},
+]
+
+def ask_vision_intent(sender_id):
+    send_quick_replies(
+        sender_id,
+        "وش تحب ندير بالصورة؟",
+        VISION_CHOICES
+    )
+    user_state[sender_id] = {"mode": "vision_wait_intent"}
+
+def intent_payload_to_text(payload: str) -> str:
+    if payload == "V_INTENT_SOLVE":
+        return "حل الموضوع/الأسئلة كامل وبطريقة مرتبة ومقسمة"
+    if payload == "V_INTENT_OCR":
+        return "استخرج النص لي في الصورة كامل ومن بعد لخّصه إذا يحتاج"
+    return "حللي وش كاين في الصورة وخد قرار: إذا موضوع حلّه، إذا أسئلة جاوب، إذا شرح اشرح"
+
+# ---------------------------
+# المعالجة الرئيسية للرسائل النصية
+# ---------------------------
 def handle_message(sender_id, message_text):
     try:
         if not message_text:
@@ -831,11 +864,12 @@ def handle_message(sender_id, message_text):
             send_long_message(sender_id, reply)
             return
 
+        # ✅ إذا كان ينتظر وصف الصورة (Nano Banana)
         if mode == "image_wait_prompt":
             user_state.pop(sender_id, None)
             send_typing(sender_id, "typing_on")
             try:
-                img_bytes = generate_image_bytes_magicphotos(txt)
+                img_bytes = nano_banana_create_image_bytes(txt)
                 attachment_id = fb_upload_image_bytes(img_bytes)
                 send_typing(sender_id, "typing_off")
                 if attachment_id:
@@ -843,9 +877,33 @@ def handle_message(sender_id, message_text):
                 else:
                     send_message(sender_id, "🎨 صرا مشكل فـ رفع الصورة 😅 جرّب بعد شوية.")
             except Exception as e:
-                print("generate_image error:", repr(e))
+                print("nano banana generate error:", repr(e))
                 send_typing(sender_id, "typing_off")
                 send_message(sender_id, "🎨 ما قدرتش نولّد الصورة دوقا 😅 جرّب وصف آخر ولا عاود بعد شوية.")
+            return
+
+        # ✅ Vision: ينتظر نية المستخدم
+        if mode == "vision_wait_intent":
+            # هنا المستخدم يكتب نية بيده (مثلا: حل الموضوع / واش كاين / ... )
+            st = user_state.get(sender_id) or {}
+            user_state.pop(sender_id, None)
+            pack = pending_images.get(sender_id) or {}
+            urls = pack.get("urls") or []
+            if not urls:
+                send_message(sender_id, "ما لقيتش الصورة 😅 عاود ابعثها من جديد.")
+                return
+
+            # نحلل أول صورة (تقدر توسّعها لعدة صور)
+            send_typing(sender_id, "typing_on")
+            try:
+                img_bytes = download_image_bytes(urls[0])
+                ans = gemini_vision_answer(img_bytes, txt)
+                send_typing(sender_id, "typing_off")
+                send_long_message(sender_id, ans)
+            except Exception as e:
+                print("vision analyze error:", repr(e))
+                send_typing(sender_id, "typing_off")
+                send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
             return
 
         # أوامر نصية
@@ -869,8 +927,7 @@ def handle_message(sender_id, message_text):
             handle_postback(sender_id, "CMD_ABOUT")
             return
 
-        # ✅ توليد صورة بأمر كتابي
-        # مثال: "ولدلي صورة قطة في الفضاء"
+        # ✅ توليد صورة بأمر كتابي (Nano Banana)
         if low.startswith("ولدلي صورة") or low.startswith("ديرلي صورة") or low.startswith("صورة "):
             prompt = txt
             prompt = prompt.replace("ولدلي صورة", "").replace("ديرلي صورة", "").strip()
@@ -880,7 +937,7 @@ def handle_message(sender_id, message_text):
             if prompt:
                 send_typing(sender_id, "typing_on")
                 try:
-                    img_bytes = generate_image_bytes_magicphotos(prompt)
+                    img_bytes = nano_banana_create_image_bytes(prompt)
                     attachment_id = fb_upload_image_bytes(img_bytes)
                     send_typing(sender_id, "typing_off")
                     if attachment_id:
@@ -888,12 +945,17 @@ def handle_message(sender_id, message_text):
                     else:
                         send_message(sender_id, "🎨 صرا مشكل فـ رفع الصورة 😅 جرّب بعد شوية.")
                 except Exception as e:
-                    print("generate_image error:", repr(e))
+                    print("nano banana generate error:", repr(e))
                     send_typing(sender_id, "typing_off")
                     send_message(sender_id, "🎨 ما قدرتش نولّد الصورة دوقا 😅 جرّب وصف آخر ولا عاود بعد شوية.")
             else:
                 user_state[sender_id] = {"mode": "image_wait_prompt"}
                 send_message(sender_id, "🎨 عطيني وصف للصورة باش نولّدها (مثال: منظر ليلي فوق البحر) 😄")
+            return
+
+        # ✅ Vision command كتابي
+        if low in ["vision", "حل صورة", "حللي صورة", "حل موضوع", "حل التمرين", "حل المواضيع"]:
+            handle_postback(sender_id, "CMD_VISION")
             return
 
         # الرد العام
@@ -931,6 +993,25 @@ def webhook():
             if "postback" in messaging:
                 payload = (messaging.get("postback") or {}).get("payload")
                 if payload:
+                    # ✅ Vision intent quick replies
+                    if payload in ["V_INTENT_SOLVE", "V_INTENT_OCR", "V_INTENT_AUTO"]:
+                        # لازم يكون عندنا صورة مخزنة
+                        pack = pending_images.get(sender_id) or {}
+                        urls = pack.get("urls") or []
+                        if not urls:
+                            send_message(sender_id, "ما لقيتش الصورة 😅 عاود ابعثها.")
+                            continue
+
+                        user_state[sender_id] = {"mode": "vision_wait_intent"}
+                        intent_text = intent_payload_to_text(payload)
+
+                        # نفوت مباشرة للتحليل بلا ما نخليه يكتب (اختياري)
+                        threading.Thread(
+                            target=lambda: _run_vision(sender_id, urls[0], intent_text),
+                            daemon=True
+                        ).start()
+                        continue
+
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
@@ -940,17 +1021,40 @@ def webhook():
             if msg_obj.get("quick_reply"):
                 payload = msg_obj["quick_reply"].get("payload")
                 if payload:
+                    # نفس منطق postback
+                    if payload in ["V_INTENT_SOLVE", "V_INTENT_OCR", "V_INTENT_AUTO"]:
+                        pack = pending_images.get(sender_id) or {}
+                        urls = pack.get("urls") or []
+                        if not urls:
+                            send_message(sender_id, "ما لقيتش الصورة 😅 عاود ابعثها.")
+                            continue
+                        intent_text = intent_payload_to_text(payload)
+                        threading.Thread(
+                            target=lambda: _run_vision(sender_id, urls[0], intent_text),
+                            daemon=True
+                        ).start()
+                        continue
+
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
             # attachments (صور)
             attachments = msg_obj.get("attachments") or []
             if attachments:
-                threading.Thread(
-                    target=handle_image_attachments,
-                    args=(sender_id, attachments),
-                    daemon=True
-                ).start()
+                # نخزن الروابط ونطلب من المستخدم النية
+                urls = []
+                for att in attachments:
+                    if (att or {}).get("type") == "image":
+                        url = (((att.get("payload") or {}).get("url")) or "").strip()
+                        if url:
+                            urls.append(url)
+
+                if urls:
+                    pending_images[sender_id] = {"urls": urls, "ts": time.time()}
+                    # نسقسيه وش يحب يدير
+                    threading.Thread(target=ask_vision_intent, args=(sender_id,), daemon=True).start()
+                else:
+                    send_message(sender_id, "ما فهمتش الصورة 😅 جرّب ابعثها وحدها/واضحة.")
                 continue
 
             # text
@@ -958,6 +1062,18 @@ def webhook():
             threading.Thread(target=handle_message, args=(sender_id, message_text), daemon=True).start()
 
     return "OK", 200
+
+def _run_vision(sender_id: str, img_url: str, intent_text: str):
+    try:
+        send_typing(sender_id, "typing_on")
+        img_bytes = download_image_bytes(img_url)
+        ans = gemini_vision_answer(img_bytes, intent_text)
+        send_typing(sender_id, "typing_off")
+        send_long_message(sender_id, ans)
+    except Exception as e:
+        print("_run_vision error:", repr(e))
+        send_typing(sender_id, "typing_off")
+        send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
