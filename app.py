@@ -18,8 +18,7 @@ NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "http://apo-fares.abrdns.com/nano
 
 # ✅ Gemini Vision
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
 user_memory = {}
 user_state = {}      # {user_id: {"mode":"..."} ...}
 pending_images = {}  # ✅ نخزنو آخر صور استلمناها مؤقتا: {user_id: {"urls":[...], "ts": time.time()}}
