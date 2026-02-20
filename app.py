@@ -23,7 +23,7 @@ XAI_VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-4")  # vision
 XAI_TEXT_MODEL = os.getenv("XAI_TEXT_MODEL", "grok-4-1-fast-reasoning")  # text fallback
 
 # ✅ OCR (fallback)
-OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "helloworld")  # بدّلها إذا عندك key مدفوع/مليح
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "")  # خليه فارغ إذا ما عندكش key
 
 user_memory = {}
 user_state = {}      # {user_id: {"mode":"..."} ...}
@@ -333,7 +333,7 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ Nano Banana - توليد صورة (GET كما الوثيقة) + fallback POST
+# ✅ Nano Banana - توليد صورة (fix: ما يطيحش edit mode بالغلط)
 # ---------------------------
 def _tight_prompt(user_prompt: str) -> str:
     p = (user_prompt or "").strip()
@@ -351,64 +351,58 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
     if not p:
         raise ValueError("empty prompt")
 
-    # ✅ 1) جرّب GET (كما الوثيقة)
-    try:
-        _log("NANO", f"GET {NANO_BANANA_URL}?mode=create&prompt_len={len(p)}")
-        rg = requests.get(
-            NANO_BANANA_URL,
-            params={"mode": "create", "prompt": p},
-            timeout=120
-        )
-        _log("NANO", f"GET STATUS {rg.status_code} CT={rg.headers.get('content-type')}")
-        _log("NANO", f"GET BODY {_short(rg.text, 600)}")
+    tries = [
+        ("GET_QS",   lambda: requests.get(NANO_BANANA_URL, params={"mode":"create","prompt":p}, timeout=120)),
+        ("POST_JSON",lambda: requests.post(NANO_BANANA_URL, json={"mode":"create","prompt":p}, timeout=120)),
+        ("POST_FORM",lambda: requests.post(NANO_BANANA_URL, data={"mode":"create","prompt":p}, timeout=120)),
+    ]
 
-        if rg.ok and "application/json" in (rg.headers.get("content-type") or "").lower():
-            data = rg.json() or {}
-            if data.get("success") and (data.get("url") or data.get("image_url")):
-                img_url = data.get("url") or data.get("image_url")
+    last_text = ""
+    for tag, fn in tries:
+        try:
+            _log("NANO", f"{tag} -> {NANO_BANANA_URL} prompt_len={len(p)}")
+            r = fn()
+            _log("NANO", f"{tag} STATUS {r.status_code} CT={r.headers.get('content-type')}")
+            _log("NANO", f"{tag} BODY {_short(r.text, 600)}")
+            last_text = r.text or ""
+
+            if not r.ok:
+                continue
+
+            ct = (r.headers.get("content-type") or "").lower()
+
+            # إذا رجّع صورة مباشرة
+            if ct.startswith("image/"):
+                return r.content
+
+            # إذا رجّع JSON
+            data = {}
+            if "application/json" in ct or (r.text and r.text.strip().startswith("{")):
+                try:
+                    data = r.json() or {}
+                except:
+                    data = {}
+
+            img_url = data.get("url") or data.get("image_url")
+            b64img = data.get("b64") or data.get("image_base64") or data.get("data")
+
+            if b64img:
+                if "," in b64img and "base64" in b64img.split(",")[0]:
+                    b64img = b64img.split(",", 1)[1]
+                return base64.b64decode(b64img)
+
+            if img_url:
                 _log("NANO", f"DOWNLOADING IMAGE URL: {img_url}")
                 img = requests.get(img_url, timeout=60)
                 _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
                 img.raise_for_status()
                 return img.content
-    except Exception as e:
-        _log("NANO", f"GET FLOW ERROR: {repr(e)}")
 
-    # ✅ 2) fallback POST
-    _log("NANO", f"POST {NANO_BANANA_URL} mode=create prompt_len={len(p)}")
-    r = requests.post(
-        NANO_BANANA_URL,
-        json={"mode": "create", "prompt": p},
-        timeout=120
-    )
-    _log("NANO", f"POST STATUS {r.status_code} CT={r.headers.get('content-type')}")
-    _log("NANO", f"POST BODY {_short(r.text, 600)}")
+        except Exception as e:
+            _log("NANO", f"{tag} ERROR: {repr(e)}")
+            continue
 
-    if not r.ok:
-        raise Exception(f"nano_banana_error {r.status_code} {(r.text or '')[:200]}")
-
-    ct = (r.headers.get("content-type") or "").lower()
-    if ct.startswith("image/"):
-        return r.content
-
-    data = {}
-    if "application/json" in ct:
-        data = r.json() or {}
-
-    img_url = data.get("url") or data.get("image_url")
-    b64img = data.get("b64") or data.get("image_base64") or data.get("data")
-
-    if b64img:
-        if "," in b64img and "base64" in b64img.split(",")[0]:
-            b64img = b64img.split(",", 1)[1]
-        return base64.b64decode(b64img)
-
-    if img_url:
-        img = requests.get(img_url, timeout=60)
-        img.raise_for_status()
-        return img.content
-
-    raise Exception(f"nano_banana_bad_response {(r.text or '')[:200]}")
+    raise Exception(f"nano_banana_error_last {(last_text or '')[:200]}")
 
 # ---------------------------
 # ✅ Image downloader
@@ -421,20 +415,28 @@ def download_image_bytes(image_url: str) -> bytes:
     return r.content
 
 # ---------------------------
-# ✅ OCR (fallback) - OCR.Space
+# ✅ OCR (fallback) - OCR.Space (fix: language invalid + بدون key ما يطيحش)
 # ---------------------------
 def ocr_extract_text(image_bytes: bytes) -> str:
+    # إذا ماكانش API KEY، ما ندير والو
+    if not OCR_SPACE_API_KEY:
+        _log("OCR", "SKIP: OCR_SPACE_API_KEY empty")
+        return ""
+
     try:
         _log("OCR", "OCR.Space parse/image (multipart)")
         url = "https://api.ocr.space/parse/image"
         files = {"file": ("image.jpg", image_bytes, "image/jpeg")}
+
+        # ✅ أهم إصلاح: language لازم تكون ara/eng/fre أو نخليها auto (نحيوها)
         data = {
-            "language": "ara",          # يخدم عربي مليح، وراح يقرأ لاتيني ثاني
+            # "language": "ara",  # إذا تحب تثبتها عربي
             "isOverlayRequired": "false",
             "detectOrientation": "true",
             "scale": "true",
             "OCREngine": "2",
         }
+
         headers = {"apikey": OCR_SPACE_API_KEY}
         res = requests.post(url, files=files, data=data, headers=headers, timeout=90)
         _log("OCR", f"STATUS={res.status_code}")
@@ -444,6 +446,11 @@ def ocr_extract_text(image_bytes: bytes) -> str:
             return ""
 
         js = res.json() or {}
+
+        # إذا كاين ErrorMessage نرجع فارغ
+        if js.get("IsErroredOnProcessing"):
+            return ""
+
         parsed = js.get("ParsedResults") or []
         if not parsed:
             return ""
@@ -1035,11 +1042,11 @@ def handle_message(sender_id, message_text):
             try:
                 img_url = urls[0]
 
-                # ✅ 1) جرّب Grok Vision مباشرة
+                # ✅ 1) Grok Vision
                 ans = grok_vision_answer(img_url, txt)
 
-                # ✅ إذا Grok رجّع 429 ولا رد فارغ: fallback OCR + Grok Text
-                if ("429" in ans) or (not ans.strip()):
+                # ✅ fallback OCR + Grok text (إذا فشل/فارغ/429)
+                if (not ans.strip()) or ("429" in ans):
                     img_bytes = download_image_bytes(img_url)
                     extracted = ocr_extract_text(img_bytes)
                     if extracted.strip():
@@ -1214,7 +1221,7 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
         ans = grok_vision_answer(img_url, intent_text)
 
         # ✅ fallback OCR + Grok text
-        if ("429" in ans) or (not ans.strip()):
+        if (not ans.strip()) or ("429" in ans):
             img_bytes = download_image_bytes(img_url)
             extracted = ocr_extract_text(img_bytes)
             if extracted.strip():
