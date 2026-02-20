@@ -18,7 +18,9 @@ NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "http://apo-fares.abrdns.com/nano
 
 # ✅ Gemini Vision
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
+# ✅ صلحت الافتراضي باش ما يجيبش 404 على "latest"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
 user_memory = {}
 user_state = {}      # {user_id: {"mode":"..."} ...}
 pending_images = {}  # ✅ نخزنو آخر صور استلمناها مؤقتا: {user_id: {"urls":[...], "ts": time.time()}}
@@ -28,6 +30,19 @@ session.headers.update({
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json,text/plain,*/*",
 })
+
+# ---------------------------
+# ✅ LOGS Helper (باش تشوف الخطأ بدقة)
+# ---------------------------
+def _log(tag: str, msg: str):
+    try:
+        print(f"[{tag}] {msg}")
+    except:
+        pass
+
+def _short(s: str, n: int = 500):
+    s = s or ""
+    return s[:n]
 
 # ---------------------------
 # 58 ولاية (عربي/إنجليزي) + مدينة مرجعية للصلاة/الطقس
@@ -314,6 +329,7 @@ def _tight_prompt(user_prompt: str) -> str:
         "Requirements: follow the description exactly, no extra objects, no random text, high quality, sharp details."
     )
 
+# ✅ صلحت Nano Banana باش يدعم: success+url / base64 / bytes / image_url
 def nano_banana_create_image_bytes(prompt: str) -> bytes:
     if not NANO_BANANA_URL:
         raise Exception("NANO_BANANA_URL ناقص")
@@ -321,41 +337,102 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
     if not p:
         raise ValueError("empty prompt")
 
-    # POST (كما شرحته)
-    r = requests.post(
-        NANO_BANANA_URL,
-        json={"mode": "create", "prompt": p},
-        timeout=120
-    )
+    _log("NANO", f"POST {NANO_BANANA_URL} mode=create prompt_len={len(p)}")
+    try:
+        r = requests.post(
+            NANO_BANANA_URL,
+            json={"mode": "create", "prompt": p},
+            timeout=120
+        )
+    except Exception as e:
+        _log("NANO", f"REQUEST ERROR: {repr(e)}")
+        raise
+
+    _log("NANO", f"STATUS {r.status_code} CT={r.headers.get('content-type')}")
+    _log("NANO", f"BODY { _short(r.text, 600) }")
+
     if not r.ok:
         raise Exception(f"nano_banana_error {r.status_code} {(r.text or '')[:200]}")
 
-    data = r.json() if "application/json" in (r.headers.get("content-type") or "") else {}
-    if not data.get("success") or not data.get("url"):
-        raise Exception(f"nano_banana_bad_response {(r.text or '')[:200]}")
+    ct = (r.headers.get("content-type") or "").lower()
 
-    img_url = data["url"]
-    img = requests.get(img_url, timeout=60)
-    img.raise_for_status()
-    return img.content
+    # 1) إذا رجّع صورة مباشرة
+    if ct.startswith("image/"):
+        _log("NANO", "RETURNED DIRECT IMAGE BYTES")
+        return r.content
+
+    # 2) إذا رجّع JSON
+    data = {}
+    if "application/json" in ct:
+        try:
+            data = r.json() or {}
+        except Exception as e:
+            _log("NANO", f"JSON PARSE ERROR: {repr(e)}")
+            data = {}
+
+    # حالات مختلفة ممكن يرجّعهم السيرفر
+    # - {success:true, url:"..."}
+    # - {success:true, image_url:"..."}
+    # - {success:true, b64:"..."} أو {image_base64:"..."}
+    # - {success:true, data:"<base64>"}
+    img_url = data.get("url") or data.get("image_url")
+    b64img = data.get("b64") or data.get("image_base64") or data.get("data")
+
+    if b64img:
+        _log("NANO", f"FOUND BASE64 IMAGE len={len(b64img)}")
+        try:
+            # ينحي prefix data:image/png;base64,
+            if "," in b64img and "base64" in b64img.split(",")[0]:
+                b64img = b64img.split(",", 1)[1]
+            return base64.b64decode(b64img)
+        except Exception as e:
+            _log("NANO", f"BASE64 DECODE ERROR: {repr(e)}")
+            raise Exception("nano_banana_base64_decode_error")
+
+    if img_url:
+        _log("NANO", f"DOWNLOADING IMAGE URL: {img_url}")
+        img = requests.get(img_url, timeout=60)
+        _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
+        img.raise_for_status()
+        return img.content
+
+    # إذا ماكان لا URL لا Base64
+    raise Exception(f"nano_banana_bad_response {(r.text or '')[:200]}")
 
 # ---------------------------
 # ✅ Gemini Vision - تحليل/حل مواضيع من الصور
 # ---------------------------
 def download_image_bytes(image_url: str) -> bytes:
+    _log("IMG", f"GET {image_url}")
     r = requests.get(image_url, timeout=40)
+    _log("IMG", f"STATUS {r.status_code} CT={r.headers.get('content-type')}")
     r.raise_for_status()
     return r.content
 
+# ✅ صلحت Gemini Vision: fallback موديلات + logs + تجنب 404
 def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
     if not GEMINI_API_KEY:
         return "لازم تحط GEMINI_API_KEY في Env باش نخدم Vision."
 
-    # Gemini generateContent
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    # نجرب موديلات متعددة (الـ 404 غالبا model name غلط/غير متاح)
+    model_candidates = [
+        (GEMINI_MODEL or "").strip(),
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-pro",
+    ]
+
+    # نحي الفارغ والتكرار
+    seen = set()
+    models = []
+    for m in model_candidates:
+        if m and m not in seen:
+            models.append(m)
+            seen.add(m)
+
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-    # Prompt دزيري + “حل مواضيع” مرتب
     instruction = f"""
 راك Botivity شاب جزائري تهدر بدزيري مفهومة.
 المستخدم عطاك صورة فيها موضوع/تمرين/أسئلة/وثيقة/رسمة.
@@ -389,16 +466,39 @@ def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
         ]
     }
 
-    res = requests.post(endpoint, params={"key": GEMINI_API_KEY}, json=payload, timeout=90)
-    if not res.ok:
-        return f"صرا مشكل مع Gemini Vision 😅 ({res.status_code})"
+    for m in models:
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+        try:
+            _log("GEMINI", f"TRY MODEL={m}")
+            res = requests.post(endpoint, params={"key": GEMINI_API_KEY}, json=payload, timeout=90)
+            _log("GEMINI", f"STATUS={res.status_code}")
+            _log("GEMINI", f"BODY={_short(res.text, 600)}")
 
-    data = res.json() or {}
-    try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return clean_reply(text)
-    except:
-        return "ما قدرتش نقرأ الرد تاع Vision دوقا 😅 جرّب عاود."
+            # 404 يعني الموديل غير متاح -> نكمل للّي بعده
+            if res.status_code == 404:
+                continue
+
+            if not res.ok:
+                return f"صرا مشكل مع Gemini Vision 😅 ({res.status_code})"
+
+            data = res.json() or {}
+            try:
+                parts = data["candidates"][0]["content"]["parts"]
+                text = ""
+                for p in parts:
+                    if "text" in p:
+                        text += p["text"]
+                text = (text or "").strip()
+                return clean_reply(text) if text else "ما قدرتش نقرأ الرد تاع Vision دوقا 😅 جرّب عاود."
+            except Exception as e:
+                _log("GEMINI", f"PARSE ERROR: {repr(e)}")
+                return "ما قدرتش نقرأ الرد تاع Vision دوقا 😅 جرّب عاود."
+
+        except Exception as e:
+            _log("GEMINI", f"REQUEST ERROR: {repr(e)}")
+            continue
+
+    return f"صرا مشكل مع Gemini Vision 😅 (404) — جرّبت: {', '.join(models)}"
 
 # ---------------------------
 # ✅ Weather (5 أيام + 24 ساعة) + ✅ Prayer
@@ -883,7 +983,6 @@ def handle_message(sender_id, message_text):
 
         # ✅ Vision: ينتظر نية المستخدم
         if mode == "vision_wait_intent":
-            # هنا المستخدم يكتب نية بيده (مثلا: حل الموضوع / واش كاين / ... )
             st = user_state.get(sender_id) or {}
             user_state.pop(sender_id, None)
             pack = pending_images.get(sender_id) or {}
@@ -892,7 +991,6 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "ما لقيتش الصورة 😅 عاود ابعثها من جديد.")
                 return
 
-            # نحلل أول صورة (تقدر توسّعها لعدة صور)
             send_typing(sender_id, "typing_on")
             try:
                 img_bytes = download_image_bytes(urls[0])
@@ -994,7 +1092,6 @@ def webhook():
                 if payload:
                     # ✅ Vision intent quick replies
                     if payload in ["V_INTENT_SOLVE", "V_INTENT_OCR", "V_INTENT_AUTO"]:
-                        # لازم يكون عندنا صورة مخزنة
                         pack = pending_images.get(sender_id) or {}
                         urls = pack.get("urls") or []
                         if not urls:
@@ -1004,7 +1101,6 @@ def webhook():
                         user_state[sender_id] = {"mode": "vision_wait_intent"}
                         intent_text = intent_payload_to_text(payload)
 
-                        # نفوت مباشرة للتحليل بلا ما نخليه يكتب (اختياري)
                         threading.Thread(
                             target=lambda: _run_vision(sender_id, urls[0], intent_text),
                             daemon=True
@@ -1020,7 +1116,6 @@ def webhook():
             if msg_obj.get("quick_reply"):
                 payload = msg_obj["quick_reply"].get("payload")
                 if payload:
-                    # نفس منطق postback
                     if payload in ["V_INTENT_SOLVE", "V_INTENT_OCR", "V_INTENT_AUTO"]:
                         pack = pending_images.get(sender_id) or {}
                         urls = pack.get("urls") or []
@@ -1040,7 +1135,6 @@ def webhook():
             # attachments (صور)
             attachments = msg_obj.get("attachments") or []
             if attachments:
-                # نخزن الروابط ونطلب من المستخدم النية
                 urls = []
                 for att in attachments:
                     if (att or {}).get("type") == "image":
@@ -1050,7 +1144,6 @@ def webhook():
 
                 if urls:
                     pending_images[sender_id] = {"urls": urls, "ts": time.time()}
-                    # نسقسيه وش يحب يدير
                     threading.Thread(target=ask_vision_intent, args=(sender_id,), daemon=True).start()
                 else:
                     send_message(sender_id, "ما فهمتش الصورة 😅 جرّب ابعثها وحدها/واضحة.")
