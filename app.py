@@ -1,8 +1,5 @@
 # app.py
 # Botivity - Facebook Messenger Bot (Weather + Prayer + Chat + Nano Banana Image + Gemini Vision)
-# ✅ نسخة كاملة “Copy/Paste” جاهزة لـ GitHub + Render
-# ✅ Fix Gemini 404 (Auto-pick model) + Fix mime_type + Better logs
-# ✅ Nano Banana: logs + parsing مرن + إرسال الصورة كـ attachment_id (مش رابط)
 
 import os
 import time
@@ -22,12 +19,11 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
 
-# ✅ Nano Banana endpoint (لازم يرجّع JSON فيه url أو image_base64 أو bytes)
+# ✅ Nano Banana endpoint
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "")
 
 # ✅ Gemini Vision
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# خليه بسيط: gemini-1.5-flash أو خليه فارغ وخلي auto-pick يخدم
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # ---------------------------
@@ -208,7 +204,6 @@ def send_long_message(recipient_id, text):
         send_message(recipient_id, p)
         time.sleep(0.15)
 
-# ✅ upload image bytes to FB and send attachment_id (Not a link)
 def fb_upload_image_bytes(image_bytes: bytes, timeout=60) -> str:
     if not PAGE_ACCESS_TOKEN:
         raise Exception("PAGE_ACCESS_TOKEN ناقص")
@@ -304,7 +299,7 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ Nano Banana - tighter prompt + robust response
+# ✅ Nano Banana
 # ---------------------------
 def _tight_prompt(user_prompt: str) -> str:
     p = (user_prompt or "").strip()
@@ -323,14 +318,12 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
     if not p:
         raise ValueError("empty prompt")
 
-    # IMPORTANT: nano-banana.php لازم يكون HTTPS إذا تقدر
     r = requests.post(
         NANO_BANANA_URL,
         json={"mode": "create", "prompt": p},
         timeout=120
     )
 
-    # Logs for Render
     print("NANO STATUS:", r.status_code)
     print("NANO CT:", r.headers.get("content-type"))
     print("NANO TEXT:", (r.text or "")[:500])
@@ -340,33 +333,27 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
 
     ct = (r.headers.get("content-type") or "").lower()
 
-    # Case 1: returns direct image bytes
     if "image/" in ct:
         return r.content
 
-    # Case 2: returns JSON
     data = {}
     try:
         data = r.json()
     except:
         data = {}
 
-    # If returns base64
     b64img = data.get("image_base64") or data.get("base64") or data.get("image")
     if b64img and isinstance(b64img, str) and len(b64img) > 100:
-        # sometimes "data:image/png;base64,...."
         if "base64," in b64img:
             b64img = b64img.split("base64,", 1)[1]
         return base64.b64decode(b64img)
 
-    # If returns URL
     img_url = data.get("url") or data.get("image_url") or data.get("result") or ""
     if img_url and isinstance(img_url, str) and img_url.startswith("http"):
         img = requests.get(img_url, timeout=60)
         img.raise_for_status()
         return img.content
 
-    # If returns nested structure
     if isinstance(data.get("data"), dict):
         u = data["data"].get("url") or ""
         if u.startswith("http"):
@@ -377,7 +364,7 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
     raise Exception("nano_banana_bad_response")
 
 # ---------------------------
-# ✅ Gemini Vision - FIX 404 (auto-pick model) + correct mime (NO imghdr)
+# ✅ Gemini Vision - بدون imghdr
 # ---------------------------
 def gemini_list_models() -> list:
     if not GEMINI_API_KEY:
@@ -394,25 +381,21 @@ def gemini_list_models() -> list:
 def pick_gemini_model(preferred: str) -> str:
     pref = (preferred or "").replace("models/", "").strip()
     models = gemini_list_models()
-    names = [(m.get("name") or "") for m in models]  # ex: "models/gemini-1.5-flash"
+    names = [(m.get("name") or "") for m in models]
 
-    # 1) preferred
     if pref:
         want = f"models/{pref}"
         if want in names:
             return want
 
-    # 2) fallback list
     for key in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro"]:
         want = f"models/{key}"
         if want in names:
             return want
 
-    # 3) any available
     if names:
         return names[0]
 
-    # 4) last resort
     return f"models/{pref}" if pref else "models/gemini-1.5-flash"
 
 def download_image_bytes(image_url: str) -> bytes:
@@ -420,29 +403,24 @@ def download_image_bytes(image_url: str) -> bytes:
     r.raise_for_status()
     return r.content
 
+# ✅ بديل imghdr: نحدد النوع من header تاع الصورة
 def detect_mime(image_bytes: bytes) -> str:
-    b = image_bytes[:16]
-
-    # PNG signature
-    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+    b = image_bytes or b""
+    if len(b) >= 12 and b[:8] == b"\x89PNG\r\n\x1a\n":
         return "image/png"
-
-    # JPEG signature
-    if b[:3] == b"\xff\xd8\xff":
+    if len(b) >= 3 and b[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
-
-    # WEBP signature: RIFF....WEBP
-    if b.startswith(b"RIFF") and b[8:12] == b"WEBP":
+    if len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP":
         return "image/webp"
-
-    # default
+    if len(b) >= 6 and (b[:6] == b"GIF87a" or b[:6] == b"GIF89a"):
+        return "image/gif"
     return "image/jpeg"
 
 def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
     if not GEMINI_API_KEY:
         return "لازم تحط GEMINI_API_KEY في Render Env باش نخدم حل الصور 🖼️"
 
-    model_name = pick_gemini_model(GEMINI_MODEL)  # returns "models/...."
+    model_name = pick_gemini_model(GEMINI_MODEL)
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
     mime = detect_mime(image_bytes)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -482,7 +460,6 @@ def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
     print("GEMINI TEXT:", (res.text or "")[:700])
 
     if not res.ok:
-        # 404 غالبا موديل غير متاح -> نعاود بموديل ثاني (مرة وحدة)
         if res.status_code == 404:
             alt = "gemini-1.5-flash"
             model_name2 = pick_gemini_model(alt)
@@ -740,13 +717,13 @@ def about_text():
     )
 
 # ---------------------------
-# System prompt (as you gave)
+# System prompt
 # ---------------------------
 def get_ai_response(user_id, message_text):
     if user_id not in user_memory:
         user_memory[user_id] = []
 
-    system_prompt = ( """
+system_prompt =("""
 أنت "Botivity" — شاب جزائري 100%، تهدر بدزيري مفهومة (فصحى مبسطة مع لمسة دزايرية) كيما صاحب قريب، ذكي وتفهم المشاعر.
 
 🎯 شخصيتك:
@@ -780,7 +757,7 @@ def get_ai_response(user_id, message_text):
 - إذا سقصا: "شكون فارس؟"
 تجاوب بوصف مليح عليه: طموح، يحب البرمجة، يخدم بعقلية منظمة، يهتم بالتفاصيل، يحب يعطي قيمة للناس، ويطوّر المشروع خطوة بخطوة.
 - كل مرة بدّل الصياغة باش ما يبانش الرد محفوظ.
-""")
+""") 
 
     hist = user_memory[user_id][-8:]
     ctx = [{"role": "system", "content": system_prompt}]
@@ -844,11 +821,9 @@ def handle_postback(sender_id, payload):
     if payload == "GET_STARTED":
         show_main_options(sender_id, "أهلا بيك في Botivity 😄")
         return
-
     if payload == "CMD_ABOUT":
         send_long_message(sender_id, about_text())
         return
-
     if payload == "CMD_WEATHER":
         send_quick_replies(
             sender_id,
@@ -859,35 +834,27 @@ def handle_postback(sender_id, payload):
             ]
         )
         return
-
     if payload == "CMD_WEATHER_24H":
         user_state[sender_id] = {"mode": "weather24_wait_wilaya"}
         send_message(sender_id, "⏰ عطيني اسم الولاية (عربي ولا إنجليزي)")
         return
-
     if payload == "CMD_WEATHER_5D":
         user_state[sender_id] = {"mode": "weather5_wait_wilaya"}
         send_message(sender_id, "📅 عطيني اسم الولاية (عربي ولا إنجليزي)")
         return
-
     if payload == "CMD_PRAYER":
         user_state[sender_id] = {"mode": "prayer_wait_wilaya"}
         send_message(sender_id, "🕌 عطيني اسم الولاية (عربي ولا إنجليزي)")
         return
-
     if payload == "CMD_IMAGE":
         user_state[sender_id] = {"mode": "image_wait_prompt"}
         send_message(sender_id, "🎨 عطيني وصف للصورة (مثال: قطة في الفضاء ستايل سينمائي) 😄")
         return
-
     if payload == "CMD_VISION":
         user_state[sender_id] = {"mode": "vision_wait_image"}
         send_message(sender_id, "🖼️ ابعثلي الصورة تاع الموضوع/التمرين، ومن بعد نسقسيك وش تحب ندير بيها 😄")
         return
 
-# ---------------------------
-# Message handler
-# ---------------------------
 def handle_message(sender_id, message_text):
     try:
         if not message_text:
@@ -927,7 +894,6 @@ def handle_message(sender_id, message_text):
             send_long_message(sender_id, reply)
             return
 
-        # ✅ Nano Banana (generate)
         if mode == "image_wait_prompt":
             user_state.pop(sender_id, None)
             send_typing(sender_id, "typing_on")
@@ -945,7 +911,6 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "🎨 ما قدرتش نولّد الصورة دوقا 😅 جرّب وصف آخر ولا عاود بعد شوية.")
             return
 
-        # ✅ Vision: user typed intent manually (optional)
         if mode == "vision_wait_intent":
             user_state.pop(sender_id, None)
             pack = pending_images.get(sender_id) or {}
@@ -966,7 +931,6 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
             return
 
-        # Commands
         if low in ["طقس", "weather", "meteo", "مناخ"]:
             handle_postback(sender_id, "CMD_WEATHER")
             return
@@ -986,7 +950,6 @@ def handle_message(sender_id, message_text):
             handle_postback(sender_id, "CMD_VISION")
             return
 
-        # Quick generate: "ولدلي صورة ..."
         if low.startswith("ولدلي صورة") or low.startswith("ديرلي صورة") or low.startswith("صورة "):
             prompt = txt.replace("ولدلي صورة", "").replace("ديرلي صورة", "").strip()
             if prompt.lower().startswith("صورة"):
@@ -1011,7 +974,6 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "🎨 ما قدرتش نولّد الصورة دوقا 😅 جرّب وصف آخر ولا عاود بعد شوية.")
             return
 
-        # Default chat
         send_typing(sender_id, "typing_on")
         reply = get_ai_response(sender_id, txt)
         send_typing(sender_id, "typing_off")
@@ -1020,9 +982,6 @@ def handle_message(sender_id, message_text):
     except Exception as e:
         print("handle_message error:", repr(e))
 
-# ---------------------------
-# Webhook verify + receive
-# ---------------------------
 @app.route("/", methods=["GET"])
 def verify():
     token = request.args.get("hub.verify_token")
@@ -1055,11 +1014,9 @@ def webhook():
             if not sender_id:
                 continue
 
-            # postback
             if "postback" in messaging:
                 payload = (messaging.get("postback") or {}).get("payload")
                 if payload:
-                    # Vision intent buttons
                     if payload in ["V_INTENT_SOLVE", "V_INTENT_OCR", "V_INTENT_AUTO"]:
                         pack = pending_images.get(sender_id) or {}
                         urls = pack.get("urls") or []
@@ -1075,7 +1032,6 @@ def webhook():
 
             msg_obj = messaging.get("message") or {}
 
-            # quick reply payload
             if msg_obj.get("quick_reply"):
                 payload = msg_obj["quick_reply"].get("payload")
                 if payload:
@@ -1092,7 +1048,6 @@ def webhook():
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
-            # attachments (images)
             attachments = msg_obj.get("attachments") or []
             if attachments:
                 urls = []
@@ -1104,13 +1059,11 @@ def webhook():
 
                 if urls:
                     pending_images[sender_id] = {"urls": urls, "ts": time.time()}
-                    # Ask what to do with the image
                     threading.Thread(target=ask_vision_intent, args=(sender_id,), daemon=True).start()
                 else:
                     send_message(sender_id, "ما فهمتش الصورة 😅 جرّب ابعثها وحدها/واضحة.")
                 continue
 
-            # text
             message_text = (msg_obj.get("text") or "").strip()
             threading.Thread(target=handle_message, args=(sender_id, message_text), daemon=True).start()
 
