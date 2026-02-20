@@ -11,7 +11,6 @@ import requests
 import datetime
 import base64
 import json
-import imghdr
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -378,7 +377,7 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
     raise Exception("nano_banana_bad_response")
 
 # ---------------------------
-# ✅ Gemini Vision - FIX 404 (auto-pick model) + correct mime
+# ✅ Gemini Vision - FIX 404 (auto-pick model) + correct mime (NO imghdr)
 # ---------------------------
 def gemini_list_models() -> list:
     if not GEMINI_API_KEY:
@@ -422,11 +421,21 @@ def download_image_bytes(image_url: str) -> bytes:
     return r.content
 
 def detect_mime(image_bytes: bytes) -> str:
-    kind = imghdr.what(None, h=image_bytes) or "jpeg"
-    if kind == "png":
+    b = image_bytes[:16]
+
+    # PNG signature
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
-    if kind == "webp":
+
+    # JPEG signature
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+
+    # WEBP signature: RIFF....WEBP
+    if b.startswith(b"RIFF") and b[8:12] == b"WEBP":
         return "image/webp"
+
+    # default
     return "image/jpeg"
 
 def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
@@ -475,7 +484,6 @@ def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
     if not res.ok:
         # 404 غالبا موديل غير متاح -> نعاود بموديل ثاني (مرة وحدة)
         if res.status_code == 404:
-            # جرّب موديل آخر مباشرة
             alt = "gemini-1.5-flash"
             model_name2 = pick_gemini_model(alt)
             endpoint2 = f"https://generativelanguage.googleapis.com/v1beta/{model_name2}:generateContent"
