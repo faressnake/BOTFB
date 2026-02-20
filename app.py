@@ -13,8 +13,11 @@ PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
 
-# ✅ Nano Banana (Text-to-Image + Edit)
-NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "http://apo-fares.abrdns.com/nano-banana.php")
+# ✅ Nano Banana (Text-to-Image + Edit)  ✅✅✅ FIXED FOR YOUR PHP
+# الـPHP اللي عطيتني يعيط لـ NanoBanana.php بـ GET:
+# create: ?text=...
+# edit:   ?text=...&links=IMAGE_URL
+NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
 
 # ✅ Grok (xAI)
 XAI_API_KEY = (os.getenv("XAI_API_KEY", "") or os.getenv("GROK_API_KEY", "")).strip()  # ✅ fallback
@@ -333,7 +336,7 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ Nano Banana - توليد صورة (FIX: prompt يتبعت في body في POST)
+# ✅ Nano Banana - توليد/تعديل صورة (FIXED FOR YOUR PHP)
 # ---------------------------
 def _tight_prompt(user_prompt: str) -> str:
     p = (user_prompt or "").strip()
@@ -344,87 +347,63 @@ def _tight_prompt(user_prompt: str) -> str:
         "Requirements: follow the description exactly, no extra objects, no random text, high quality, sharp details."
     )
 
-def nano_banana_create_image_bytes(prompt: str) -> bytes:
+def nano_banana_call(text: str, image_url: str = None) -> dict:
     if not NANO_BANANA_URL:
         raise Exception("NANO_BANANA_URL ناقص")
 
+    # ✅ هذا الـAPI يستعمل GET + params: text (+ links للايديت)
+    params = {"text": text}
+    if image_url:
+        params["links"] = image_url
+
+    _log("NANO", f"GET -> {NANO_BANANA_URL} text_len={len(text)} edit={bool(image_url)}")
+    r = requests.get(NANO_BANANA_URL, params=params, timeout=180)
+    _log("NANO", f"STATUS {r.status_code} CT={r.headers.get('content-type')}")
+    _log("NANO", f"BODY {_short(r.text, 700)}")
+
+    r.raise_for_status()
+    try:
+        return r.json() or {}
+    except:
+        return {}
+
+def nano_banana_create_image_bytes(prompt: str) -> bytes:
     p = _tight_prompt(prompt)
     if not p:
         raise ValueError("empty prompt")
 
-    tries = [
-        # 1) GET_QS
-        ("GET_QS", lambda: requests.get(
-            NANO_BANANA_URL,
-            params={"mode": "create", "prompt": p},
-            timeout=120
-        )),
-        # 2) POST_FORM (php يقرا $_POST)
-        ("POST_FORM", lambda: requests.post(
-            NANO_BANANA_URL,
-            data={"mode": "create", "prompt": p},
-            timeout=120
-        )),
-        # 3) POST_JSON (إذا php يقرا json)
-        ("POST_JSON", lambda: requests.post(
-            NANO_BANANA_URL,
-            json={"mode": "create", "prompt": p},
-            timeout=120
-        )),
-        # 4) POST_FORM_TEXT (احتياط إذا السيرفر يستعمل text بدل prompt)
-        ("POST_FORM_TEXT", lambda: requests.post(
-            NANO_BANANA_URL,
-            data={"mode": "create", "text": p},
-            timeout=120
-        )),
-    ]
+    js = nano_banana_call(p, image_url=None)
 
-    last_text = ""
-    for tag, fn in tries:
-        try:
-            _log("NANO", f"{tag} -> {NANO_BANANA_URL} prompt_len={len(p)}")
-            r = fn()
-            _log("NANO", f"{tag} STATUS {r.status_code} CT={r.headers.get('content-type')}")
-            _log("NANO", f"{tag} BODY {_short(r.text, 600)}")
-            last_text = r.text or ""
+    if not js.get("success") or not js.get("url"):
+        err = js.get("error") or "Unknown error"
+        raise Exception(f"nano_banana_failed {err}")
 
-            if not r.ok:
-                continue
+    img_url = js["url"]
+    _log("NANO", f"IMAGE URL: {img_url}")
+    img = requests.get(img_url, timeout=120)
+    _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
+    img.raise_for_status()
+    return img.content
 
-            ct = (r.headers.get("content-type") or "").lower()
+def nano_banana_edit_image_bytes(image_url: str, prompt: str) -> bytes:
+    p = _tight_prompt(prompt)
+    if not p:
+        raise ValueError("empty prompt")
+    if not image_url:
+        raise ValueError("empty image_url")
 
-            # صورة مباشرة
-            if ct.startswith("image/"):
-                return r.content
+    js = nano_banana_call(p, image_url=image_url)
 
-            # JSON
-            data = {}
-            if "application/json" in ct or (r.text and r.text.strip().startswith("{")):
-                try:
-                    data = r.json() or {}
-                except:
-                    data = {}
+    if not js.get("success") or not js.get("url"):
+        err = js.get("error") or "Unknown error"
+        raise Exception(f"nano_banana_edit_failed {err}")
 
-            img_url = data.get("url") or data.get("image_url")
-            b64img = data.get("b64") or data.get("image_base64") or data.get("data")
-
-            if b64img:
-                if "," in b64img and "base64" in b64img.split(",")[0]:
-                    b64img = b64img.split(",", 1)[1]
-                return base64.b64decode(b64img)
-
-            if img_url:
-                _log("NANO", f"DOWNLOADING IMAGE URL: {img_url}")
-                img = requests.get(img_url, timeout=60)
-                _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
-                img.raise_for_status()
-                return img.content
-
-        except Exception as e:
-            _log("NANO", f"{tag} ERROR: {repr(e)}")
-            continue
-
-    raise Exception(f"nano_banana_error_last {(last_text or '')[:200]}")
+    out_url = js["url"]
+    _log("NANO", f"EDIT OUT URL: {out_url}")
+    img = requests.get(out_url, timeout=120)
+    _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
+    img.raise_for_status()
+    return img.content
 
 # ---------------------------
 # ✅ Image downloader + ✅ data URL (باش Grok ما يطيحش مع fbcdn)
@@ -527,7 +506,6 @@ def grok_vision_answer(image_url: str, user_intent: str) -> str:
 - دير عناوين واضحة و في الاخر: "📌 الخلاصة" نقاط قصيرة.
 """.strip()
 
-    # ✅ حمل الصورة وحولها لـ data URL
     img_bytes = download_image_bytes(image_url)
     data_url = to_data_url(img_bytes)
 
@@ -1071,11 +1049,8 @@ def handle_message(sender_id, message_text):
             send_typing(sender_id, "typing_on")
             try:
                 img_url = urls[0]
-
-                # ✅ 1) Grok Vision (FIXED)
                 ans = grok_vision_answer(img_url, txt)
 
-                # ✅ fallback OCR + Grok text (إذا فشل/فارغ/429/400)
                 if (not ans.strip()) or ("429" in ans) or ("(400)" in ans):
                     img_bytes = download_image_bytes(img_url)
                     extracted = ocr_extract_text(img_bytes)
@@ -1180,7 +1155,6 @@ def webhook():
             if "postback" in messaging:
                 payload = (messaging.get("postback") or {}).get("payload")
                 if payload:
-                    # ✅ Vision intent quick replies
                     if payload in ["V_INTENT_SOLVE", "V_INTENT_OCR", "V_INTENT_AUTO"]:
                         pack = pending_images.get(sender_id) or {}
                         urls = pack.get("urls") or []
@@ -1200,7 +1174,6 @@ def webhook():
 
             msg_obj = messaging.get("message") or {}
 
-            # quick reply payload
             if msg_obj.get("quick_reply"):
                 payload = msg_obj["quick_reply"].get("payload")
                 if payload:
@@ -1220,7 +1193,6 @@ def webhook():
                     threading.Thread(target=handle_postback, args=(sender_id, payload), daemon=True).start()
                 continue
 
-            # attachments (صور)
             attachments = msg_obj.get("attachments") or []
             if attachments:
                 urls = []
@@ -1237,7 +1209,6 @@ def webhook():
                     send_message(sender_id, "ما فهمتش الصورة 😅 جرّب ابعثها وحدها/واضحة.")
                 continue
 
-            # text
             message_text = (msg_obj.get("text") or "").strip()
             threading.Thread(target=handle_message, args=(sender_id, message_text), daemon=True).start()
 
@@ -1247,10 +1218,8 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
     try:
         send_typing(sender_id, "typing_on")
 
-        # ✅ Grok vision (FIXED)
         ans = grok_vision_answer(img_url, intent_text)
 
-        # ✅ fallback OCR + Grok text
         if (not ans.strip()) or ("429" in ans) or ("(400)" in ans):
             img_bytes = download_image_bytes(img_url)
             extracted = ocr_extract_text(img_bytes)
