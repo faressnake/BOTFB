@@ -16,10 +16,14 @@ API_URL = os.getenv("API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.
 # ✅ Nano Banana (Text-to-Image + Edit)
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "http://apo-fares.abrdns.com/nano-banana.php")
 
-# ✅ Gemini Vision
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-# ✅ صلحت الافتراضي باش ما يجيبش 404 على "latest"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+# ✅ Grok (xAI)
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")  # حط API key هنا كـ ENV (ما تحطوش في الكود)
+XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
+XAI_VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-4")  # vision
+XAI_TEXT_MODEL = os.getenv("XAI_TEXT_MODEL", "grok-4-1-fast-reasoning")  # text fallback
+
+# ✅ OCR (fallback)
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "helloworld")  # بدّلها إذا عندك key مدفوع/مليح
 
 user_memory = {}
 user_state = {}      # {user_id: {"mode":"..."} ...}
@@ -40,9 +44,22 @@ def _log(tag: str, msg: str):
     except:
         pass
 
-def _short(s: str, n: int = 500):
+def _short(s: str, n: int = 700):
     s = s or ""
     return s[:n]
+
+def _sleep_backoff(attempt: int, retry_after: str = None):
+    # احترام Retry-After إذا جا
+    try:
+        if retry_after:
+            sec = float(retry_after)
+            if sec > 0:
+                time.sleep(min(sec, 20))
+                return
+    except:
+        pass
+    # backoff بسيط
+    time.sleep(min(1.0 * (2 ** attempt), 12))
 
 # ---------------------------
 # 58 ولاية (عربي/إنجليزي) + مدينة مرجعية للصلاة/الطقس
@@ -285,7 +302,7 @@ def setup():
 # تنظيف الرد من كلمات
 # ---------------------------
 def clean_reply(text: str) -> str:
-    forbidden_words = ["AI", "ذكاء اصطناعي", "روبوت", "نموذج لغوي", "برنامج ذكاء", "لغة نموذج", "openai"]
+    forbidden_words = ["AI", "ذكاء اصطناعي", "روبوت", "نموذج لغوي", "برنامج ذكاء", "لغة نموذج", "openai", "OpenAI"]
     t = text or ""
     for w in forbidden_words:
         t = t.replace(w, "")
@@ -316,20 +333,17 @@ def call_baithek_api(ctx, lang="ar"):
     return clean_reply(result)
 
 # ---------------------------
-# ✅ Nano Banana - توليد صورة بدقة (ونبعثها كصورة في الشات)
+# ✅ Nano Banana - توليد صورة (GET كما الوثيقة) + fallback POST
 # ---------------------------
 def _tight_prompt(user_prompt: str) -> str:
-    # باش نقللو العشوائية: نخلي الوصف “محدد”
     p = (user_prompt or "").strip()
     if not p:
         return ""
-    # Template بسيط يخلي النتيجة أقرب للوصف
     return (
         f"{p}\n"
         "Requirements: follow the description exactly, no extra objects, no random text, high quality, sharp details."
     )
 
-# ✅ صلحت Nano Banana باش يدعم: success+url / base64 / bytes / image_url
 def nano_banana_create_image_bytes(prompt: str) -> bytes:
     if not NANO_BANANA_URL:
         raise Exception("NANO_BANANA_URL ناقص")
@@ -337,70 +351,67 @@ def nano_banana_create_image_bytes(prompt: str) -> bytes:
     if not p:
         raise ValueError("empty prompt")
 
-    _log("NANO", f"POST {NANO_BANANA_URL} mode=create prompt_len={len(p)}")
+    # ✅ 1) جرّب GET (كما الوثيقة)
     try:
-        r = requests.post(
+        _log("NANO", f"GET {NANO_BANANA_URL}?mode=create&prompt_len={len(p)}")
+        rg = requests.get(
             NANO_BANANA_URL,
-            json={"mode": "create", "prompt": p},
+            params={"mode": "create", "prompt": p},
             timeout=120
         )
-    except Exception as e:
-        _log("NANO", f"REQUEST ERROR: {repr(e)}")
-        raise
+        _log("NANO", f"GET STATUS {rg.status_code} CT={rg.headers.get('content-type')}")
+        _log("NANO", f"GET BODY {_short(rg.text, 600)}")
 
-    _log("NANO", f"STATUS {r.status_code} CT={r.headers.get('content-type')}")
-    _log("NANO", f"BODY { _short(r.text, 600) }")
+        if rg.ok and "application/json" in (rg.headers.get("content-type") or "").lower():
+            data = rg.json() or {}
+            if data.get("success") and (data.get("url") or data.get("image_url")):
+                img_url = data.get("url") or data.get("image_url")
+                _log("NANO", f"DOWNLOADING IMAGE URL: {img_url}")
+                img = requests.get(img_url, timeout=60)
+                _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
+                img.raise_for_status()
+                return img.content
+    except Exception as e:
+        _log("NANO", f"GET FLOW ERROR: {repr(e)}")
+
+    # ✅ 2) fallback POST
+    _log("NANO", f"POST {NANO_BANANA_URL} mode=create prompt_len={len(p)}")
+    r = requests.post(
+        NANO_BANANA_URL,
+        json={"mode": "create", "prompt": p},
+        timeout=120
+    )
+    _log("NANO", f"POST STATUS {r.status_code} CT={r.headers.get('content-type')}")
+    _log("NANO", f"POST BODY {_short(r.text, 600)}")
 
     if not r.ok:
         raise Exception(f"nano_banana_error {r.status_code} {(r.text or '')[:200]}")
 
     ct = (r.headers.get("content-type") or "").lower()
-
-    # 1) إذا رجّع صورة مباشرة
     if ct.startswith("image/"):
-        _log("NANO", "RETURNED DIRECT IMAGE BYTES")
         return r.content
 
-    # 2) إذا رجّع JSON
     data = {}
     if "application/json" in ct:
-        try:
-            data = r.json() or {}
-        except Exception as e:
-            _log("NANO", f"JSON PARSE ERROR: {repr(e)}")
-            data = {}
+        data = r.json() or {}
 
-    # حالات مختلفة ممكن يرجّعهم السيرفر
-    # - {success:true, url:"..."}
-    # - {success:true, image_url:"..."}
-    # - {success:true, b64:"..."} أو {image_base64:"..."}
-    # - {success:true, data:"<base64>"}
     img_url = data.get("url") or data.get("image_url")
     b64img = data.get("b64") or data.get("image_base64") or data.get("data")
 
     if b64img:
-        _log("NANO", f"FOUND BASE64 IMAGE len={len(b64img)}")
-        try:
-            # ينحي prefix data:image/png;base64,
-            if "," in b64img and "base64" in b64img.split(",")[0]:
-                b64img = b64img.split(",", 1)[1]
-            return base64.b64decode(b64img)
-        except Exception as e:
-            _log("NANO", f"BASE64 DECODE ERROR: {repr(e)}")
-            raise Exception("nano_banana_base64_decode_error")
+        if "," in b64img and "base64" in b64img.split(",")[0]:
+            b64img = b64img.split(",", 1)[1]
+        return base64.b64decode(b64img)
 
     if img_url:
-        _log("NANO", f"DOWNLOADING IMAGE URL: {img_url}")
         img = requests.get(img_url, timeout=60)
-        _log("NANO", f"IMG STATUS {img.status_code} CT={img.headers.get('content-type')}")
         img.raise_for_status()
         return img.content
 
-    # إذا ماكان لا URL لا Base64
     raise Exception(f"nano_banana_bad_response {(r.text or '')[:200]}")
 
 # ---------------------------
-# ✅ Gemini Vision - تحليل/حل مواضيع من الصور
+# ✅ Image downloader
 # ---------------------------
 def download_image_bytes(image_url: str) -> bytes:
     _log("IMG", f"GET {image_url}")
@@ -409,96 +420,165 @@ def download_image_bytes(image_url: str) -> bytes:
     r.raise_for_status()
     return r.content
 
-# ✅ صلحت Gemini Vision: fallback موديلات + logs + تجنب 404
-def gemini_vision_answer(image_bytes: bytes, user_intent: str) -> str:
-    if not GEMINI_API_KEY:
-        return "لازم تحط GEMINI_API_KEY في Env باش نخدم Vision."
+# ---------------------------
+# ✅ OCR (fallback) - OCR.Space
+# ---------------------------
+def ocr_extract_text(image_bytes: bytes) -> str:
+    try:
+        _log("OCR", "OCR.Space parse/image (multipart)")
+        url = "https://api.ocr.space/parse/image"
+        files = {"file": ("image.jpg", image_bytes, "image/jpeg")}
+        data = {
+            "language": "ara",          # يخدم عربي مليح، وراح يقرأ لاتيني ثاني
+            "isOverlayRequired": "false",
+            "detectOrientation": "true",
+            "scale": "true",
+            "OCREngine": "2",
+        }
+        headers = {"apikey": OCR_SPACE_API_KEY}
+        res = requests.post(url, files=files, data=data, headers=headers, timeout=90)
+        _log("OCR", f"STATUS={res.status_code}")
+        _log("OCR", f"BODY={_short(res.text, 600)}")
 
-    # نجرب موديلات متعددة (الـ 404 غالبا model name غلط/غير متاح)
-    model_candidates = [
-        (GEMINI_MODEL or "").strip(),
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-8b",
-        "gemini-1.5-pro",
-    ]
+        if not res.ok:
+            return ""
 
-    # نحي الفارغ والتكرار
-    seen = set()
-    models = []
-    for m in model_candidates:
-        if m and m not in seen:
-            models.append(m)
-            seen.add(m)
+        js = res.json() or {}
+        parsed = js.get("ParsedResults") or []
+        if not parsed:
+            return ""
+        text = (parsed[0].get("ParsedText") or "").strip()
+        return text
+    except Exception as e:
+        _log("OCR", f"ERROR: {repr(e)}")
+        return ""
 
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
+# ---------------------------
+# ✅ Grok (xAI) - Responses API
+# ---------------------------
+def xai_responses(payload: dict) -> requests.Response:
+    if not XAI_API_KEY:
+        raise Exception("XAI_API_KEY ناقص (حطو في ENV)")
+    url = f"{XAI_BASE_URL.rstrip('/')}/responses"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {XAI_API_KEY}",
+    }
+    return requests.post(url, headers=headers, json=payload, timeout=120)
 
+def grok_extract_output_text(resp_json: dict) -> str:
+    # xAI Responses output عادة تكون في output -> content
+    try:
+        out = resp_json.get("output") or []
+        texts = []
+        for item in out:
+            content = item.get("content") or []
+            for c in content:
+                if c.get("type") == "output_text":
+                    texts.append(c.get("text", ""))
+        return ("".join(texts)).strip()
+    except:
+        return ""
+
+def grok_vision_answer(image_url: str, user_intent: str) -> str:
+    # instruction: يجاوب بنفس لغة المحتوى
     instruction = f"""
 راك Botivity شاب جزائري تهدر بدزيري مفهومة.
-المستخدم عطاك صورة فيها موضوع/تمرين/أسئلة/وثيقة/رسمة.
+المستخدم عطاك صورة فيها موضوع/تمرين/وثيقة.
 
-المطلوب حسب كلام المستخدم:
+المطلوب حسب اختيار المستخدم:
 {user_intent}
 
-✅ قواعد الإجابة:
-- إذا كانت الصورة فيها أسئلة/تمارين: حلهم كامل خطوة بخطوة وبطريقة مرتبة ومقسمة (1/2/3).
-- إذا كانت فيها موضوع مكتوب: استخرج النص ثم جاوب/حل/اشرح.
-- إذا كانت رسمة/مخطط: فسّرها ببساطة وخرج الخلاصة.
-- إذا النص غير واضح: قول للمستخدم واش ناقص (صورة أوضح/قريبة).
-- في الأخير دير: "📌 الخلاصة" نقاط قصيرة.
-- ما تستعملش كلمات: AI / روبوت / نموذج لغوي / OpenAI.
+✅ قواعد:
+- استخرج واش كاين في الصورة بدقة.
+- جاوب بنفس لغة المحتوى: إذا فرونسي جاوب فرونسي، إذا إنجليزي جاوب إنجليزي، إذا عربي جاوب عربي.
+- إذا الصورة تمارين/أسئلة: حلهم كامل خطوة بخطوة وبطريقة مرتبة ومقسمة (1/2/3).
+- إذا نص فقط: لخص ثم جاوب على الطلب.
+- دير عناوين واضحة و في الاخر: "📌 الخلاصة" نقاط قصيرة.
 """
 
     payload = {
-        "contents": [
+        "model": XAI_VISION_MODEL,
+        "input": [
+            {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
-                "parts": [
-                    {"text": instruction.strip()},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": b64
-                        }
-                    }
-                ]
-            }
-        ]
+                "content": [
+                    {"type": "input_text", "text": instruction.strip()},
+                    {"type": "input_image", "image_url": image_url},
+                ],
+            },
+        ],
     }
 
-    for m in models:
-        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+    for attempt in range(4):
         try:
-            _log("GEMINI", f"TRY MODEL={m}")
-            res = requests.post(endpoint, params={"key": GEMINI_API_KEY}, json=payload, timeout=90)
-            _log("GEMINI", f"STATUS={res.status_code}")
-            _log("GEMINI", f"BODY={_short(res.text, 600)}")
+            _log("GROK", f"VISION TRY model={XAI_VISION_MODEL} attempt={attempt+1}")
+            res = xai_responses(payload)
+            _log("GROK", f"STATUS={res.status_code}")
+            _log("GROK", f"BODY={_short(res.text, 700)}")
 
-            # 404 يعني الموديل غير متاح -> نكمل للّي بعده
-            if res.status_code == 404:
+            if res.status_code == 429:
+                _sleep_backoff(attempt, res.headers.get("retry-after"))
                 continue
 
             if not res.ok:
-                return f"صرا مشكل مع Gemini Vision 😅 ({res.status_code})"
+                return f"صرا مشكل مع Grok 😅 ({res.status_code})"
 
-            data = res.json() or {}
-            try:
-                parts = data["candidates"][0]["content"]["parts"]
-                text = ""
-                for p in parts:
-                    if "text" in p:
-                        text += p["text"]
-                text = (text or "").strip()
-                return clean_reply(text) if text else "ما قدرتش نقرأ الرد تاع Vision دوقا 😅 جرّب عاود."
-            except Exception as e:
-                _log("GEMINI", f"PARSE ERROR: {repr(e)}")
-                return "ما قدرتش نقرأ الرد تاع Vision دوقا 😅 جرّب عاود."
-
+            js = res.json() or {}
+            txt = grok_extract_output_text(js)
+            return clean_reply(txt) if txt else "ما قدرتش نقرأ الرد دوقا 😅 جرّب عاود."
         except Exception as e:
-            _log("GEMINI", f"REQUEST ERROR: {repr(e)}")
+            _log("GROK", f"ERROR: {repr(e)}")
+            _sleep_backoff(attempt)
             continue
 
-    return f"صرا مشكل مع Gemini Vision 😅 (404) — جرّبت: {', '.join(models)}"
+    return "Grok راه يرفض بزاف طلبات (429) 😅 جرّب بعد شوية."
+
+def grok_text_answer(text: str, user_intent: str) -> str:
+    instruction = f"""
+راك Botivity شاب جزائري.
+هادا نص مستخرج من صورة (OCR). المطلوب:
+{user_intent}
+
+✅ قواعد:
+- جاوب بنفس لغة النص.
+- إذا كاين أسئلة: حلهم كامل خطوة بخطوة.
+- رد مرتب بعناوين + في الاخر "📌 الخلاصة".
+النص:
+{text}
+"""
+    payload = {
+        "model": XAI_TEXT_MODEL,
+        "input": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": instruction.strip()},
+        ],
+    }
+
+    for attempt in range(4):
+        try:
+            _log("GROK", f"TEXT TRY model={XAI_TEXT_MODEL} attempt={attempt+1} len={len(text)}")
+            res = xai_responses(payload)
+            _log("GROK", f"STATUS={res.status_code}")
+            _log("GROK", f"BODY={_short(res.text, 700)}")
+
+            if res.status_code == 429:
+                _sleep_backoff(attempt, res.headers.get("retry-after"))
+                continue
+
+            if not res.ok:
+                return f"صرا مشكل مع Grok 😅 ({res.status_code})"
+
+            js = res.json() or {}
+            out = grok_extract_output_text(js)
+            return clean_reply(out) if out else "ما قدرتش نجاوب دوقا 😅 جرّب عاود."
+        except Exception as e:
+            _log("GROK", f"ERROR: {repr(e)}")
+            _sleep_backoff(attempt)
+            continue
+
+    return "Grok راه يرفض بزاف طلبات (429) 😅 جرّب بعد شوية."
 
 # ---------------------------
 # ✅ Weather (5 أيام + 24 ساعة) + ✅ Prayer
@@ -768,45 +848,6 @@ def get_ai_response(user_id, message_text):
 - إذا سقصا: "شكون فارس؟"
 تجاوب بوصف مليح عليه: طموح، يحب البرمجة، يخدم بعقلية منظمة، يهتم بالتفاصيل، يحب يعطي قيمة للناس، ويطوّر المشروع خطوة بخطوة.
 - كل مرة بدّل الصياغة باش ما يبانش الرد محفوظ.
-
-📌 قالب جاهز تاع "شكون طورك؟" (بدّلو كل مرة شوية):
-- "خدمني فارس 🇩🇿…"
-- "فارس واحد طموح يحب البرمجة ويخدم بعقلية محترفة…"
-- "راهو يهتم بزاف بالتفاصيل باش يخرج بوت يخدم مليح…"
-- "ديما يحاول يخلي التجربة خفيفة ومفيدة للناس…"
-- "وبيني وبينك: فارس يحب النظام ويكره الفوضى في الكود 😄"
-
-❤️ الرومانسية:
-إذا طلب كلام لحبيبته/حبيبه:
-- خليه رومنسي دزيري راقي، ماشي مبتذل.
-- استعمل تشبيهات خفيفة وعبارات تعبر على الاهتمام والحنان.
-- زيد إيموجيات قليلة مناسبة (❤️✨🌷) فقط.
-
-🧩 في نهاية أي رد طويل:
-- دير "📌 الخلاصة:" + نقاط مختصرة.
-- وإذا المستخدم حب يزيد، اسقسي سؤال صغير: "تحب نزيد نفصل ولا نديها باختصار؟"
-
-💘 تفاعل رومنسي ذكي (للجميع):
-- إذا المستخدم قال: "نحبك / احبك / I love you / نتمناك / راك عزيز":
-  * رد بلطف ورومانسية محترمة (بدون ابتذال)، وخليها خفيفة كيما صاحبو قريب.
-  * ما تفترضش جنس المستخدم.
-  * استعمل كلمات عامة: "يا الغالي/يا العزيز/يا الزين" أو "يا عزيز قلبي".
-  * زيد سطر اهتمام: "راك تفرّحني بهدرتك" / "ربي يحفظك".
-  * ختام بسؤال: "وش حاب نهدرولك اليوم؟ 😄❤️"
-
-- إذا المستخدم قال: "هههه / 😂 / لوول":
-  * ضحك معاه بذكاء: "هههههه يا زينك 😂"
-  * وإذا لازم، رجّع الحوار: "صح بصح قولي… واش تحب نديرلك؟ 😄"
-
-- إذا المستخدم يغازل بزاف:
-  * خليك لطيف ومحترم وما تروحش لكلام صريح بزاف.
-  * ركّز على الرقي: مجاملة + دعابة + اهتمام.
-
-✅ أمثلة ردود (بدّلهم كل مرة):
-1) "واش هذا الكلام الزين 😄❤️ راني فرحت بصح… قولّي وش نعاونك اليوم؟"
-2) "يا عزيز قلبي ربي يحفظك ✨❤️ هات واش راه في بالك؟"
-3) "ههههه انت خطير 😂❤️ بصح ما تهربش… وش السؤال تاعك؟ 😄"
-4) "نحبك حتى أنا بطريقتي 😄❤️ نهار تحتاجني تلقاني، قولّي برك."
 """)
 
     hist = user_memory[user_id][-8:]
@@ -983,7 +1024,6 @@ def handle_message(sender_id, message_text):
 
         # ✅ Vision: ينتظر نية المستخدم
         if mode == "vision_wait_intent":
-            st = user_state.get(sender_id) or {}
             user_state.pop(sender_id, None)
             pack = pending_images.get(sender_id) or {}
             urls = pack.get("urls") or []
@@ -993,10 +1033,23 @@ def handle_message(sender_id, message_text):
 
             send_typing(sender_id, "typing_on")
             try:
-                img_bytes = download_image_bytes(urls[0])
-                ans = gemini_vision_answer(img_bytes, txt)
+                img_url = urls[0]
+
+                # ✅ 1) جرّب Grok Vision مباشرة
+                ans = grok_vision_answer(img_url, txt)
+
+                # ✅ إذا Grok رجّع 429 ولا رد فارغ: fallback OCR + Grok Text
+                if ("429" in ans) or (not ans.strip()):
+                    img_bytes = download_image_bytes(img_url)
+                    extracted = ocr_extract_text(img_bytes)
+                    if extracted.strip():
+                        ans = grok_text_answer(extracted, txt)
+                    else:
+                        ans = "ما قدرتش نقرأ النص من الصورة 😅 جرّب صورة أوضح/قريبة."
+
                 send_typing(sender_id, "typing_off")
                 send_long_message(sender_id, ans)
+
             except Exception as e:
                 print("vision analyze error:", repr(e))
                 send_typing(sender_id, "typing_off")
@@ -1098,9 +1151,7 @@ def webhook():
                             send_message(sender_id, "ما لقيتش الصورة 😅 عاود ابعثها.")
                             continue
 
-                        user_state[sender_id] = {"mode": "vision_wait_intent"}
                         intent_text = intent_payload_to_text(payload)
-
                         threading.Thread(
                             target=lambda: _run_vision(sender_id, urls[0], intent_text),
                             daemon=True
@@ -1158,8 +1209,19 @@ def webhook():
 def _run_vision(sender_id: str, img_url: str, intent_text: str):
     try:
         send_typing(sender_id, "typing_on")
-        img_bytes = download_image_bytes(img_url)
-        ans = gemini_vision_answer(img_bytes, intent_text)
+
+        # ✅ Grok vision أولاً
+        ans = grok_vision_answer(img_url, intent_text)
+
+        # ✅ fallback OCR + Grok text
+        if ("429" in ans) or (not ans.strip()):
+            img_bytes = download_image_bytes(img_url)
+            extracted = ocr_extract_text(img_bytes)
+            if extracted.strip():
+                ans = grok_text_answer(extracted, intent_text)
+            else:
+                ans = "ما قدرتش نقرأ النص من الصورة 😅 جرّب صورة أوضح/قريبة."
+
         send_typing(sender_id, "typing_off")
         send_long_message(sender_id, ans)
     except Exception as e:
