@@ -40,7 +40,15 @@ session.headers.update({
     "User-Agent": "Mozilla/5.0",
     "Accept": "application/json,text/plain,*/*",
 })
-
+def aifree_post(json_payload):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "application/json,text/plain,*/*",
+        "Content-Type": "application/json",
+        "Referer": "https://aifreeforever.com/",
+        "Origin": "https://aifreeforever.com",
+    }
+    return session.post(AIFREE_API_URL, json=json_payload, headers=headers, timeout=60)
 # ---------------------------
 # ✅ LOGS Helper (باش تشوف الخطأ بدقة)
 # ---------------------------
@@ -850,11 +858,14 @@ def debug_aifree(message_text):
         "format": "paragraph",
         "conversationHistory": []
     }
-    r = requests.post(AIFREE_API_URL, json=payload, timeout=60)
+    r = aifree_post(payload)
     print("STATUS:", r.status_code)
     print("RESP_HEADERS:", dict(r.headers))
     print("BODY:", (r.text or "")[:800])
+    print("CF?", "cloudflare" in (r.text or "").lower())
     return r.status_code
+    
+    
 # ---------------------------
 # الرد العام (System Prompt كما بعتهولك)
 # ---------------------------
@@ -915,7 +926,7 @@ def get_ai_response(user_id, message_text):
         debug_aifree(message_text)
 
         # ✅ الطلب الحقيقي (باش تكمل الخدمة)
-        r = requests.post(AIFREE_API_URL, json=payload, timeout=60)
+        r = aifree_post(payload)
         r.raise_for_status()
         data = r.json()
         answer = data.get("answer") or ""
