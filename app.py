@@ -843,7 +843,18 @@ def about_text():
         "✨ Smarter Conversations Start Here\n"
         "👨‍💻 By FaresCodeX 🇩🇿"
     )
-
+def debug_aifree(message_text):
+    payload = {
+        "question": message_text,
+        "tone": "friendly",
+        "format": "paragraph",
+        "conversationHistory": []
+    }
+    r = requests.post(AIFREE_API_URL, json=payload, timeout=60)
+    print("STATUS:", r.status_code)
+    print("RESP_HEADERS:", dict(r.headers))
+    print("BODY:", (r.text or "")[:800])
+    return r.status_code
 # ---------------------------
 # الرد العام (System Prompt كما بعتهولك)
 # ---------------------------
@@ -891,6 +902,7 @@ def get_ai_response(user_id, message_text):
 الآن جاوب على سؤال المستخدم التالي بنفس القواعد:
 """
 
+
     payload = {
         "question": BOTIVITY_SYSTEM + "\n\nالسؤال:\n" + message_text,
         "tone": "friendly",
@@ -899,6 +911,10 @@ def get_ai_response(user_id, message_text):
     }
 
     try:
+        # ✅ Debug فقط (يطبع في logs)
+        debug_aifree(message_text)
+
+        # ✅ الطلب الحقيقي (باش تكمل الخدمة)
         r = requests.post(AIFREE_API_URL, json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
