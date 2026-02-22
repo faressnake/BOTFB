@@ -13,44 +13,28 @@ app = Flask(__name__)
 
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
-AIFREE_API_URL = os.getenv("AIFREE_API_URL",
-    "https://aifreeforever.com/api/generate-ai-answer")
 
-# ✅ Nano Banana (Text-to-Image + Edit)  ✅✅✅ FIXED FOR YOUR PHP
-# الـPHP اللي عطيتني يعيط لـ NanoBanana.php بـ GET:
-# create: ?text=...
-# edit:   ?text=...&links=IMAGE_URL
+# ✅ API تاعك (apo-fares)
+FARES_API_URL = os.getenv("FARES_API_URL", "http://apo-fares.abrdns.com/GPT-5.php")
+
+# ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
 
 # ✅ Grok (xAI)
-XAI_API_KEY = (os.getenv("XAI_API_KEY", "") or os.getenv("GROK_API_KEY", "")).strip()  # ✅ fallback
+XAI_API_KEY = (os.getenv("XAI_API_KEY", "") or os.getenv("GROK_API_KEY", "")).strip()
 XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
-XAI_VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-4")  # vision
-XAI_TEXT_MODEL = os.getenv("XAI_TEXT_MODEL", "grok-4-1-fast-reasoning")  # text fallback
+XAI_VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-4")
+XAI_TEXT_MODEL = os.getenv("XAI_TEXT_MODEL", "grok-4-1-fast-reasoning")
 
 # ✅ OCR (fallback)
-OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "").strip()  # خليه فارغ إذا ما عندكش key
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "").strip()
 
 user_memory = {}
-user_state = {}      # {user_id: {"mode":"..."} ...}
-pending_images = {}  # ✅ نخزنو آخر صور استلمناها مؤقتا: {user_id: {"urls":[...], "ts": time.time()}}
+user_state = {}
+pending_images = {}
 
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json,text/plain,*/*",
-})
-def aifree_post(json_payload):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept": "application/json,text/plain,*/*",
-        "Content-Type": "application/json",
-        "Referer": "https://aifreeforever.com/",
-        "Origin": "https://aifreeforever.com",
-    }
-    return session.post(AIFREE_API_URL, json=json_payload, headers=headers, timeout=60)
 # ---------------------------
-# ✅ LOGS Helper (باش تشوف الخطأ بدقة)
+# ✅ LOGS Helper
 # ---------------------------
 def _log(tag: str, msg: str):
     try:
@@ -63,7 +47,6 @@ def _short(s: str, n: int = 700):
     return s[:n]
 
 def _sleep_backoff(attempt: int, retry_after: str = None):
-    # احترام Retry-After إذا جا
     try:
         if retry_after:
             sec = float(retry_after)
@@ -72,11 +55,10 @@ def _sleep_backoff(attempt: int, retry_after: str = None):
                 return
     except:
         pass
-    # backoff بسيط
     time.sleep(min(1.0 * (2 ** attempt), 12))
 
 # ---------------------------
-# 58 ولاية (عربي/إنجليزي) + مدينة مرجعية للصلاة/الطقس
+# ✅ 58 ولاية
 # ---------------------------
 WILAYAS = [
     ("أدرار","Adrar","Adrar"),
@@ -219,7 +201,6 @@ def send_quick_replies(recipient_id, text, replies):
     }
     fb_post("/me/messages", payload, timeout=20)
 
-# ✅ تقسيم النص إذا طويل بزاف
 def chunk_text(text: str, max_len: int = 1500):
     t = (text or "").strip()
     if not t:
@@ -241,7 +222,6 @@ def send_long_message(recipient_id, text):
         send_message(recipient_id, p)
         time.sleep(0.2)
 
-# ✅ رفع صورة لفايسبوك وإرسالها كصورة (مش رابط)
 def fb_upload_image_bytes(image_bytes: bytes, timeout=60) -> str:
     if not PAGE_ACCESS_TOKEN:
         raise Exception("PAGE_ACCESS_TOKEN ناقص")
@@ -313,13 +293,13 @@ def setup():
     return jsonify(result), (200 if result.get("ok") else 500)
 
 # ---------------------------
-# تنظيف الرد من كلمات
+# تنظيف الرد
 # ---------------------------
 def clean_reply(text: str) -> str:
     if not text:
         return ""
 
-    forbidden_patterns = [
+    forbidden = [
         r"\bgpt[-\s]?\d*\b",
         r"\bopenai\b",
         r"\bai\b",
@@ -333,40 +313,42 @@ def clean_reply(text: str) -> str:
         r"تم\s*تطويري",
         r"تم\s*إنشائي",
         r"i\s+am\s+an?\s+ai",
-        r"i\s+am\s+a\s+language\s+model"
+        r"i\s+am\s+a\s+language\s+model",
+        r"توسعه\s*یافته\s*توسط",
+        r"توسعه یافته توسط",
     ]
 
     cleaned = text
 
-    # نحذف أي سطر فيه كلمات ممنوعة
-    safe_lines = []
-    for line in cleaned.splitlines():
-        low = line.lower()
-        if any(re.search(p, low, flags=re.IGNORECASE) for p in forbidden_patterns):
-            continue
-        safe_lines.append(line)
-
-    cleaned = "\n".join(safe_lines)
-
-    # تنظيف بقايا الكلمات لو بقات داخل النص
-    for pattern in forbidden_patterns:
+    for pattern in forbidden:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
-    # تنظيف فراغات زايدة
+    cleaned = re.sub(r"^#{1,6}\s*", "", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
-    # fallback لو تمسح كامل الرد
-    if not cleaned:
+    if not cleaned or len(cleaned) < 5:
         return "أنا Botivity 😊 نعاونك في اللي حبيت، قولّي سؤالك برك 😄"
 
     return cleaned
-# ---------------------------
-# استدعاء API تاعك (الشات العادي)
-# ---------------------------
-
 
 # ---------------------------
-# ✅ Nano Banana - توليد/تعديل صورة (FIXED FOR YOUR PHP)
+# ✅ استدعاء API تاعك (apo-fares)
+def fares_api_answer(q: str) -> str:
+    for attempt in range(3):
+        try:
+            r = requests.get(FARES_API_URL, params={"q": q}, timeout=60)
+            _log("FARES_API", f"STATUS={r.status_code} BODY={_short(r.text, 300)}")
+            r.raise_for_status()
+            js = r.json() or {}
+            return (js.get("answer") or "").strip()
+        except Exception as e:
+            _log("FARES_API", f"TRY{attempt+1} ERROR: {repr(e)}")
+            time.sleep(0.6 * (attempt + 1))
+    return ""
+
+# ---------------------------
+# ✅ Nano Banana - توليد/تعديل صورة
 # ---------------------------
 def _tight_prompt(user_prompt: str) -> str:
     p = (user_prompt or "").strip()
@@ -381,7 +363,6 @@ def nano_banana_call(text: str, image_url: str = None) -> dict:
     if not NANO_BANANA_URL:
         raise Exception("NANO_BANANA_URL ناقص")
 
-    # ✅ هذا الـAPI يستعمل GET + params: text (+ links للايديت)
     params = {"text": text}
     if image_url:
         params["links"] = image_url
@@ -436,7 +417,7 @@ def nano_banana_edit_image_bytes(image_url: str, prompt: str) -> bytes:
     return img.content
 
 # ---------------------------
-# ✅ Image downloader + ✅ data URL (باش Grok ما يطيحش مع fbcdn)
+# ✅ Image downloader + data URL
 # ---------------------------
 def download_image_bytes(image_url: str) -> bytes:
     _log("IMG", f"GET {image_url}")
@@ -458,7 +439,7 @@ def to_data_url(image_bytes: bytes) -> str:
     return f"data:{mime};base64,{b64}"
 
 # ---------------------------
-# ✅ OCR (fallback) - OCR.Space
+# ✅ OCR (fallback)
 # ---------------------------
 def ocr_extract_text(image_bytes: bytes) -> str:
     if not OCR_SPACE_API_KEY:
@@ -500,7 +481,7 @@ def ocr_extract_text(image_bytes: bytes) -> str:
     return "" if t == "__E201__" else (t or "")
 
 # ---------------------------
-# ✅ Grok (xAI) - FIX: chat/completions بدل responses
+# ✅ Grok (xAI)
 # ---------------------------
 def xai_chat_completions(payload: dict) -> requests.Response:
     if not XAI_API_KEY:
@@ -547,11 +528,12 @@ def grok_vision_answer(image_url: str, user_intent: str) -> str:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": instruction},
-                    {"type": "image_url", "image_url": {"url": data_url}},
+{"type": "image_url", "image_url": data_url},
                 ],
             },
         ],
         "temperature": 0.2,
+        "max_tokens": 900
     }
 
     for attempt in range(4):
@@ -626,7 +608,7 @@ def grok_text_answer(text: str, user_intent: str) -> str:
     return "Grok راه يرفض بزاف طلبات (429) 😅 جرّب بعد شوية."
 
 # ---------------------------
-# ✅ Weather (5 أيام + 24 ساعة) + ✅ Prayer
+# ✅ Weather + Prayer
 # ---------------------------
 AR_DAYS = ["الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت","الأحد"]
 AR_WIND_DIR = [
@@ -851,23 +833,9 @@ def about_text():
         "✨ Smarter Conversations Start Here\n"
         "👨‍💻 By FaresCodeX 🇩🇿"
     )
-def debug_aifree(message_text):
-    payload = {
-        "question": message_text,
-        "tone": "friendly",
-        "format": "paragraph",
-        "conversationHistory": []
-    }
-    r = aifree_post(payload)
-    print("STATUS:", r.status_code)
-    print("RESP_HEADERS:", dict(r.headers))
-    print("BODY:", (r.text or "")[:800])
-    print("CF?", "cloudflare" in (r.text or "").lower())
-    return r.status_code
-    
-    
+
 # ---------------------------
-# الرد العام (System Prompt كما بعتهولك)
+# ✅ الرد العام (System Prompt + apo-fares مضبوط)
 # ---------------------------
 def get_ai_response(user_id, message_text):
     BOTIVITY_SYSTEM = """
@@ -911,37 +879,29 @@ def get_ai_response(user_id, message_text):
 - أي رد لازم يكون مفيد ومطابق للسؤال.
 
 الآن جاوب على سؤال المستخدم التالي بنفس القواعد:
-"""
+""".strip().strip()
 
+    user_q = (message_text or "").strip()
 
-    payload = {
-        "question": BOTIVITY_SYSTEM + "\n\nالسؤال:\n" + message_text,
-        "tone": "friendly",
-        "format": "paragraph",
-        "conversationHistory": []
-    }
+    q1 = BOTIVITY_SYSTEM + "\n\nالسؤال:\n" + user_q
+    ans = clean_reply(fares_api_answer(q1))
 
-    try:
-        # ✅ Debug فقط (يطبع في logs)
-        debug_aifree(message_text)
+    # 🔥 إذا رجع فارسي ولا تعريف بنفسو نعاود نضغط عليه
+    if any(x in (ans or "").lower() for x in ["خوش", "توسعه", "openai", "gpt"]):
+        q2 = (
+            BOTIVITY_SYSTEM +
+            "\n\nجاوب غير بالدارجة الجزائرية وممنوع أي ذكر GPT أو OpenAI."
+            "\nجاوب مباشرة على السؤال:\n" + user_q
+        )
+        ans = clean_reply(fares_api_answer(q2))
 
-        # ✅ الطلب الحقيقي (باش تكمل الخدمة)
-        r = aifree_post(payload)
-        r.raise_for_status()
-        data = r.json()
-        answer = data.get("answer") or ""
+    if not ans:
+        return "حاول لاحقاً 😅"
 
-        if not answer:
-            return "ما فهمتش مليح، عاود قولها بطريقة أخرى 😄"
-
-        return clean_reply(answer)
-
-    except Exception as e:
-        print("AI API error:", repr(e))
-        return "راه صرا مشكل في الاتصال 😅"
+    return ans
 
 # ---------------------------
-# ✅ معالجة الأزرار (postbacks) + الأوامر
+# ✅ معالجة الأزرار + الأوامر
 # ---------------------------
 def show_main_options(sender_id, text="وش تحب دير؟"):
     send_quick_replies(
@@ -965,7 +925,6 @@ def dev_reply():
         "فارس 🇩🇿 يخدم بالقلب وبالنية ويحب الناس تستافد 💛"
     ]
     extras = ["ربي يباركلو 🙌", "يعطيه الصحة 💪", "ديما للقدّام ✨", "زيد قدّام يا فارس 🔥", "كفو عليه 😄"]
-
     return f"أنا Botivity 😊\nطورني فارس 🇩🇿\n{random.choice(praises)}\n{random.choice(extras)}"
 
 def handle_postback(sender_id, payload):
@@ -1003,20 +962,18 @@ def handle_postback(sender_id, payload):
         send_message(sender_id, "🕌 عطيني اسم الولاية (عربي ولا إنجليزي)")
         return
 
-    # ✅ Nano Banana image generator
     if payload == "CMD_IMAGE":
         user_state[sender_id] = {"mode": "image_wait_prompt"}
         send_message(sender_id, "🎨 عطيني وصف للصورة (مثال: قطة في الفضاء ستايل سينمائي) 😄")
         return
 
-    # ✅ Vision command
     if payload == "CMD_VISION":
         user_state[sender_id] = {"mode": "vision_wait_image"}
         send_message(sender_id, "🖼️ ابعثلي الصورة تاع الموضوع/التمرين، ومن بعد نقولك وش نقدر ندير بيها 😄")
         return
 
 # ---------------------------
-# ✅ Vision flow (صورة -> سؤال نية -> حل)
+# ✅ Vision flow
 # ---------------------------
 VISION_CHOICES = [
     {"title": "✅ حل الأسئلة", "payload": "V_INTENT_SOLVE"},
@@ -1025,11 +982,7 @@ VISION_CHOICES = [
 ]
 
 def ask_vision_intent(sender_id):
-    send_quick_replies(
-        sender_id,
-        "وش تحب ندير بالصورة؟",
-        VISION_CHOICES
-    )
+    send_quick_replies(sender_id, "وش تحب ندير بالصورة؟", VISION_CHOICES)
     user_state[sender_id] = {"mode": "vision_wait_intent"}
 
 def intent_payload_to_text(payload: str) -> str:
@@ -1040,7 +993,7 @@ def intent_payload_to_text(payload: str) -> str:
     return "حللي وش كاين في الصورة وخد قرار: إذا موضوع حلّه، إذا أسئلة جاوب، إذا شرح اشرح"
 
 # ---------------------------
-# المعالجة الرئيسية للرسائل النصية
+# المعالجة الرئيسية للرسائل
 # ---------------------------
 def handle_message(sender_id, message_text):
     try:
@@ -1085,7 +1038,6 @@ def handle_message(sender_id, message_text):
             send_long_message(sender_id, reply)
             return
 
-        # ✅ إذا كان ينتظر وصف الصورة (Nano Banana)
         if mode == "image_wait_prompt":
             user_state.pop(sender_id, None)
             send_typing(sender_id, "typing_on")
@@ -1103,7 +1055,6 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "🎨 ما قدرتش نولّد الصورة دوقا 😅 جرّب وصف آخر ولا عاود بعد شوية.")
             return
 
-        # ✅ Vision: ينتظر نية المستخدم (إذا جاك user كتب بدل ما يضغط)
         if mode == "vision_wait_intent":
             user_state.pop(sender_id, None)
             pack = pending_images.get(sender_id) or {}
@@ -1134,7 +1085,6 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
             return
 
-        # أوامر نصية
         if low in ["طقس", "weather", "meteo", "مناخ"]:
             handle_postback(sender_id, "CMD_WEATHER")
             return
@@ -1155,7 +1105,6 @@ def handle_message(sender_id, message_text):
             handle_postback(sender_id, "CMD_ABOUT")
             return
 
-        # ✅ توليد صورة بأمر كتابي (Nano Banana)
         if low.startswith("ولدلي صورة") or low.startswith("ديرلي صورة") or low.startswith("صورة "):
             prompt = txt
             prompt = prompt.replace("ولدلي صورة", "").replace("ديرلي صورة", "").strip()
@@ -1181,12 +1130,10 @@ def handle_message(sender_id, message_text):
                 send_message(sender_id, "🎨 عطيني وصف للصورة باش نولّدها (مثال: منظر ليلي فوق البحر) 😄")
             return
 
-        # ✅ Vision command كتابي
         if low in ["vision", "حل صورة", "حللي صورة", "حل موضوع", "حل التمرين", "حل المواضيع"]:
             handle_postback(sender_id, "CMD_VISION")
             return
 
-        # الرد العام
         send_typing(sender_id, "typing_on")
         reply = get_ai_response(sender_id, txt)
         send_typing(sender_id, "typing_off")
