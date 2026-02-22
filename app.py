@@ -20,11 +20,6 @@ FARES_API_URL = os.getenv("FARES_API_URL", "http://apo-fares.abrdns.com/GPT-5.ph
 # ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
 
-# ✅ Grok (xAI)
-XAI_API_KEY = (os.getenv("XAI_API_KEY", "") or os.getenv("GROK_API_KEY", "")).strip()
-XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
-XAI_VISION_MODEL = os.getenv("XAI_VISION_MODEL", "grok-4")
-XAI_TEXT_MODEL = os.getenv("XAI_TEXT_MODEL", "grok-4-1-fast-reasoning")
 
 # ✅ OCR (fallback)
 OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "").strip()
@@ -377,6 +372,33 @@ def fares_api_answer(q: str) -> str:
 
     return ""
 
+def vision_via_ocr_and_fares(img_url: str, intent_text: str) -> str:
+    img_bytes = download_image_bytes(img_url)
+
+    extracted = ocr_extract_text(img_bytes)
+    if not extracted.strip():
+        return "ما قدرتش نقرأ النص من الصورة 😅\nجرّب صورة أوضح/قريبة وبلا ظل."
+
+    prompt = f"""
+أنت Botivity (بوت جزائري).
+هذا نص مستخرج من صورة بـ OCR.
+
+المطلوب:
+{intent_text}
+
+النص:
+{extracted}
+
+✅ قواعد:
+- جاوب بالدارجة الجزائرية المفهومة.
+- إذا تمرين: حل خطوة بخطوة.
+- دير عناوين واضحة وفي الاخر: 📌 الخلاصة
+- ممنوع ذكر GPT/OpenAI/AI/LLM.
+""".strip()
+
+    raw = fares_api_answer(prompt)
+    ans = clean_reply(raw)
+    return ans.strip() or "صرا مشكل فالإجابة 😅 جرّب عاود."
 # ---------------------------
 # ✅ Nano Banana - توليد/تعديل صورة
 # ---------------------------
@@ -477,7 +499,11 @@ def ocr_extract_text(image_bytes: bytes) -> str:
         return ""
 
     url = "https://api.ocr.space/parse/image"
-    files = {"file": ("image.jpg", image_bytes, "image/jpeg")}
+
+    mime = guess_mime(image_bytes)
+    filename = "image.png" if mime == "image/png" else "image.jpg"
+    files = {"file": (filename, image_bytes, mime)}
+
     headers = {"apikey": OCR_SPACE_API_KEY}
 
     def _do(lang: str) -> str:
@@ -509,141 +535,6 @@ def ocr_extract_text(image_bytes: bytes) -> str:
     if t == "__E201__":
         t = _do("eng")
     return "" if t == "__E201__" else (t or "")
-
-# ---------------------------
-# ✅ Grok (xAI)
-# ---------------------------
-def xai_chat_completions(payload: dict) -> requests.Response:
-    if not XAI_API_KEY:
-        raise Exception("XAI_API_KEY ناقص (حطو في ENV)")
-    url = f"{XAI_BASE_URL.rstrip('/')}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {XAI_API_KEY}",
-    }
-    return requests.post(url, headers=headers, json=payload, timeout=120)
-
-def grok_extract_chat_text(resp_json: dict) -> str:
-    try:
-        ch = (resp_json.get("choices") or [{}])[0]
-        msg = ch.get("message") or {}
-        return (msg.get("content") or "").strip()
-    except:
-        return ""
-
-def grok_vision_answer(image_url: str, user_intent: str) -> str:
-    instruction = f"""
-راك شاب جزائري تهدر بدزيري مفهومة.
-المستخدم عطاك صورة فيها موضوع/تمرين/وثيقة.
-
-المطلوب:
-{user_intent}
-
-قواعد:
-- استخرج واش كاين في الصورة بدقة.
-- جاوب بنفس لغة المحتوى.
-- إذا تمارين/أسئلة: حلهم كامل خطوة بخطوة.
-- دير عناوين واضحة و في الاخر: 📌 الخلاصة
-""".strip()
-
-    def make_payload(fmt: int):
-        # fmt=1: {"url":...} | fmt=2: string مباشرة
-        img_part = (
-            {"type": "image_url", "image_url": {"url": image_url}}
-            if fmt == 1 else
-            {"type": "image_url", "image_url": image_url}
-        )
-        return {
-            "model": XAI_VISION_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": [
-                    {"type": "text", "text": instruction},
-                    img_part
-                ]},
-            ],
-            "temperature": 0.2,
-            "max_tokens": 900,
-        }
-
-    for attempt in range(4):
-        try:
-            for fmt in (1, 2):
-                payload = make_payload(fmt)
-
-                _log("GROK", f"VISION fmt={fmt} attempt={attempt+1}")
-                res = xai_chat_completions(payload)
-
-                _log("GROK", f"STATUS={res.status_code}")
-                _log("GROK", f"BODY={_short(res.text, 900)}")
-
-                if res.status_code == 429:
-                    _sleep_backoff(attempt, res.headers.get("retry-after"))
-                    break  # روح للـ attempt التالي
-
-                # إذا fmt=1 عطاك 400 جرّب fmt=2
-                if res.status_code == 400 and fmt == 1:
-                    continue
-
-                if not res.ok:
-                    return f"صرا مشكل مع Grok 😅 ({res.status_code})"
-
-                js = res.json() or {}
-                txt = grok_extract_chat_text(js)
-                return clean_reply(txt) if txt else "ما قدرتش نقرأ الرد دوقا 😅 جرّب عاود."
-        except Exception as e:
-            _log("GROK", f"ERROR: {repr(e)}")
-            _sleep_backoff(attempt)
-
-    return "Grok راه يرفض بزاف طلبات 😅 جرّب بعد شوية."
-
-def grok_text_answer(text: str, user_intent: str) -> str:
-    instruction = f"""
-راك شاب جزائري.
-هادا نص مستخرج من صورة (OCR). المطلوب:
-{user_intent}
-
-✅ قواعد:
-- جاوب بنفس لغة النص.
-- إذا كاين أسئلة: حلهم كامل خطوة بخطوة.
-- رد مرتب بعناوين + في الاخر "📌 الخلاصة".
-النص:
-{text}
-""".strip()
-
-    payload = {
-        "model": XAI_TEXT_MODEL,
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": instruction},
-        ],
-        "temperature": 0.2,
-    }
-
-    for attempt in range(4):
-        try:
-            _log("GROK", f"TEXT TRY model={XAI_TEXT_MODEL} attempt={attempt+1} len={len(text)}")
-            res = xai_chat_completions(payload)
-            _log("GROK", f"STATUS={res.status_code}")
-            _log("GROK", f"BODY={_short(res.text, 700)}")
-
-            if res.status_code == 429:
-                _sleep_backoff(attempt, res.headers.get("retry-after"))
-                continue
-
-            if not res.ok:
-                return f"صرا مشكل مع Grok 😅 ({res.status_code})"
-
-            js = res.json() or {}
-            out = grok_extract_chat_text(js)
-            return clean_reply(out) if out else "ما قدرتش نجاوب دوقا 😅 جرّب عاود."
-        except Exception as e:
-            _log("GROK", f"ERROR: {repr(e)}")
-            _sleep_backoff(attempt)
-            continue
-
-    return "Grok راه يرفض بزاف طلبات (429) 😅 جرّب بعد شوية."
-
 # ---------------------------
 # ✅ Weather + Prayer
 # ---------------------------
@@ -1139,16 +1030,16 @@ def handle_message(sender_id, message_text):
             send_typing(sender_id, "typing_on")
             try:
                 img_url = urls[0]
-                intent_text = intent_payload_to_text(txt)
-                ans = grok_vision_answer(img_url, intent_text)
+                choice = (txt or "").strip().lower()
 
-                if (not ans.strip()) or ("429" in ans) or ("(400)" in ans):
-                    img_bytes = download_image_bytes(img_url)
-                    extracted = ocr_extract_text(img_bytes)
-                    if extracted.strip():
-                        ans = grok_text_answer(extracted, intent_text)
-                    else:
-                        ans = "ما قدرتش نقرأ النص من الصورة 😅 جرّب صورة أوضح/قريبة."
+                if ("حل" in choice) or ("solve" in choice):
+                    intent_text = intent_payload_to_text("V_INTENT_SOLVE")
+                elif ("استخراج" in choice) or ("نص" in choice) or ("ocr" in choice) or ("text" in choice):
+                    intent_text = intent_payload_to_text("V_INTENT_OCR")
+                else:
+                    intent_text = intent_payload_to_text("V_INTENT_AUTO")
+
+                ans = vision_via_ocr_and_fares(img_url, intent_text)
 
                 send_typing(sender_id, "typing_off")
                 send_long_message(sender_id, ans)
@@ -1304,17 +1195,7 @@ def webhook():
 def _run_vision(sender_id: str, img_url: str, intent_text: str):
     try:
         send_typing(sender_id, "typing_on")
-
-        ans = grok_vision_answer(img_url, intent_text)
-
-        if (not ans.strip()) or ("429" in ans) or ("(400)" in ans):
-            img_bytes = download_image_bytes(img_url)
-            extracted = ocr_extract_text(img_bytes)
-            if extracted.strip():
-                ans = grok_text_answer(extracted, intent_text)
-            else:
-                ans = "ما قدرتش نقرأ النص من الصورة 😅 جرّب صورة أوضح/قريبة."
-
+        ans = vision_via_ocr_and_fares(img_url, intent_text)
         send_typing(sender_id, "typing_off")
         send_long_message(sender_id, ans)
     except Exception as e:
