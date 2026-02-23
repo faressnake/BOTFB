@@ -10,7 +10,6 @@ HTTP.headers.update({
     "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.7,en;q=0.6",
-    "Accept-Encoding": "gzip, deflate",
     "Referer": "https://baithek.com/",
     "Origin": "https://baithek.com",
 })
@@ -55,6 +54,22 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 
 # ✅ خليه
 BAITHEK_API_URL = os.getenv("BAITHEK_API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
+HOME_URL   = "https://baithek.com/"
+WARMUP_URL = "https://baithek.com/index.php?i=1"
+
+def baithek_warmup():
+    try:
+        h = {
+            "User-Agent": HTTP.headers.get("User-Agent", ""),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": HTTP.headers.get("Accept-Language", "ar-DZ,ar;q=0.9"),
+            "Referer": "https://baithek.com/",
+        }
+        HTTP.get(HOME_URL, headers=h, timeout=15)
+        HTTP.get(WARMUP_URL, headers=h, timeout=15)
+        _log("BAITHEK", f"warmup OK cookies={len(HTTP.cookies)}")
+    except Exception as e:
+        _log("BAITHEK", f"warmup FAIL {repr(e)}")
 
 # ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
@@ -402,13 +417,18 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
         payload["lang"] = lang
 
     headers = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Encoding": "gzip, deflate",
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
-    "Referer": "https://baithek.com/",
-    "Origin": "https://baithek.com",
-}
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
+        "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.7,en;q=0.6",
+        "Referer": "https://baithek.com/",
+        "Origin": "https://baithek.com",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    # ✅ warmup مرة قبل المحاولة الأولى (باش يجيب cookies)
+    baithek_warmup()
 
     for attempt in range(3):
         try:
@@ -418,28 +438,26 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
                     json=payload,
                     headers=headers,
                     timeout=(10, timeout),
+                    allow_redirects=True
                 )
-
-            # ✅ LOGS (لازم داخل for/try)
-            print("STATUS:", r.status_code)
-            print("CT:", r.headers.get("content-type"))
-            print("BODY_FIRST200:", (r.text or "")[:200])
 
             body = (r.text or "").strip()
             ct = (r.headers.get("content-type") or "").lower()
 
             _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
             _log("BAITHEK", f"BODY {_short(body, 220)}")
+# ✅ إذا رجع HTML ولا فارغ: غالبًا blocked / محتاج cookies
+if ("text/html" in ct) or (not body):
+    _log("BAITHEK", "blocked/html or empty -> warmup again")
+    baithek_warmup()
+    _sleep_backoff(attempt, r.headers.get("retry-after"))
+    continue
 
-            if not r.ok or not body:
+            if not r.ok:
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
 
-            if "text/html" in ct:
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            if not body.startswith("{") and not body.startswith("["):
+            if not (body.startswith("{") or body.startswith("[")):
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
 
@@ -1443,20 +1461,31 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
 def debug_baithek():
     msgs = [{"role": "user", "content": "سلام"}]
     try:
+        baithek_warmup()  # ✅ زيدها هنا
+
         r = HTTP.post(
             BAITHEK_API_URL,
             json={"name": "Botivity", "messages": msgs, "n": 1, "stream": False},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": HTTP.headers.get("User-Agent", ""),
+                "Referer": "https://baithek.com/",
+                "Origin": "https://baithek.com",
+                "X-Requested-With": "XMLHttpRequest",
+            },
             timeout=25
         )
 
         return jsonify({
-            "ok": r.ok,
+            "warmup_cookies": len(HTTP.cookies),
+     "ok": r.ok,
             "status": r.status_code,
             "ct": r.headers.get("content-type"),
             "ce": r.headers.get("content-encoding"),
             "len_bytes": len(r.content or b""),
             "final_url": getattr(r, "url", None),
-            "first300_bytes_b64": base64.b64encode((r.content or b"")[:300]).decode("utf-8")
+            "first300": (r.text or "")[:300],
         }), 200
 
     except Exception as e:
@@ -1464,4 +1493,4 @@ def debug_baithek():
         
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port) 
