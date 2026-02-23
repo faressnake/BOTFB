@@ -6,6 +6,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 HTTP = requests.Session()
+HTTP.headers.update({
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.7,en;q=0.6",
+    "Referer": "https://baithek.com/",
+    "Origin": "https://baithek.com",
+})
 
 _retry = Retry(
     total=3,
@@ -394,20 +401,33 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
         payload["lang"] = lang
 
     headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": "Botivity/1.0",
-    }
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "Referer": "https://baithek.com/",
+    "Origin": "https://baithek.com"
+}
 
     for attempt in range(3):
-        try:
-            with BAITHEK_SEM:
-                r = HTTP.post(
-                    BAITHEK_API_URL,
-                    json=payload,
-                    headers=headers,
-                    timeout=(10, timeout),  # connect, read
-                )
+    try:
+        with BAITHEK_SEM:
+            r = HTTP.post(
+                BAITHEK_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=(10, timeout),
+            )
+
+        # ✅ هنا بالضبط (نفس مستوى body/ct)
+        print("STATUS:", r.status_code)
+        print("CT:", r.headers.get("content-type"))
+        print("BODY_FIRST200:", (r.text or "")[:200])
+
+        body = (r.text or "").strip()
+        ct = (r.headers.get("content-type") or "")
+
+        _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
+        _log("BAITHEK", f"BODY {_short(body, 220)}")
 
             body = (r.text or "").strip()
             ct = (r.headers.get("content-type") or "")
