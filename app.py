@@ -227,7 +227,7 @@ def send_long_message(recipient_id, text):
     parts = chunk_text(text, max_len=1500)
     for p in parts:
         send_message(recipient_id, p)
-        time.sleep(0.2)
+        time.sleep(0.05)  # أسرع من 0.2
 
 def fb_upload_image_bytes(image_bytes: bytes, timeout=60) -> str:
     if not PAGE_ACCESS_TOKEN:
@@ -351,25 +351,21 @@ def clean_reply(text: str) -> str:
 
 # ---------------------------
 # ✅ استدعاء API تاعك (apo-fares)
-def _clip(s: str, n: int = 1200) -> str:
-    s = (s or "").strip()
-    return s[:n]
-    
-def fares_api_answer(q: str) -> str:
-    q = _clip(q, 1200)  # ✅ مهم: يقصّ الـprompt باش ما يطيحش السيرفر/URL
+HTTP = requests.Session()
 
-    for attempt in range(3):
-        # ✅ جرّب POST (أفضل)
+def fares_api_answer(q: str) -> str:
+    q = _clip(q, 900)  # قصّر prompt باش يجي الرد أسرع
+
         try:
-            r = requests.post(FARES_API_URL, data={"q": q}, timeout=60)
-            _log("FARES_API", f"POST STATUS={r.status_code} BODY={_short(r.text, 300)}")
-            if r.status_code == 405:
-                raise Exception("POST_NOT_ALLOWED")
-            r.raise_for_status()
+        r = HTTP.post(FARES_API_URL, data={"q": q}, timeout=10)  # 10 ثواني برك
+        _log("FARES_API", f"POST {r.status_code} {_short(r.text, 200)}")
+        if r.ok:
             js = r.json() or {}
             return (js.get("answer") or "").strip()
-        except Exception as e:
-            _log("FARES_API", f"POST TRY{attempt+1} ERROR: {repr(e)}")
+    except Exception as e:
+        _log("FARES_API", f"ERROR {repr(e)}")
+
+        return ""
 
         # ✅ fallback GET
         try:
@@ -382,7 +378,7 @@ def fares_api_answer(q: str) -> str:
             _log("FARES_API", f"GET TRY{attempt+1} ERROR: {repr(e)}")
             time.sleep(0.6 * (attempt + 1))
 
-    return ""
+        return ""
 
 def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "") -> str:
     img_bytes = download_image_bytes(img_url)
@@ -897,6 +893,7 @@ def get_ai_response(user_id, message_text):
 
     raw = fares_api_answer(q1)
     ans = clean_reply(raw)
+    ans = _shorten_reply(ans, 650)  # يخليه قصير
     low = (ans or "").lower()
 
     if (not ans) or any(x in low for x in ["openai", "gpt", "خوش", "توسعه", "developed", "created", "language model", "نموذج", "ذكاء"]):
