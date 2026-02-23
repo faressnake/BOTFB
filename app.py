@@ -26,8 +26,9 @@ app = Flask(__name__)
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 
-# ✅ API تاعك (apo-fares)
-FARES_API_URL = os.getenv("FARES_API_URL", "http://apo-fares.abrdns.com/GPT-5.php")
+# ✅ خليه
+BAITHEK_API_URL = os.getenv("BAITHEK_API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
+HTTP = requests.Session()
 
 # ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
@@ -59,6 +60,16 @@ def _clip(s: str, n: int = 900) -> str:
         return s
     return s[:n].strip()
 
+# ✅ حطهم هنا
+def mem_get(uid):
+    return user_memory.get(uid, [])
+
+def mem_push(uid, role, content, max_keep=10):
+    arr = user_memory.get(uid) or []
+    arr.append({"role": role, "content": _clip(content, 500)})
+    if len(arr) > max_keep:
+        arr = arr[-max_keep:]
+    user_memory[uid] = arr
 def _sleep_backoff(attempt: int, retry_after: str = None):
     try:
         if retry_after:
@@ -356,43 +367,54 @@ def clean_reply(text: str) -> str:
     return cleaned
 
 # ---------------------------
-# ✅ استدعاء API تاعك (apo-fares)
-HTTP = requests.Session()
+def baithek_answer(messages, name="Botivity", lang=None, timeout=35) -> str:
+    """
+    messages: list of {role:'system'|'user'|'assistant', content:'...'}
+    يرجّع نص الرد فقط.
+    """
+    if not BAITHEK_API_URL:
+        return ""
 
-def fares_api_answer(q: str) -> str:
-    q = _clip(q, 900)  # قصّر prompt باش يجي الرد أسرع
+    payload = {
+        "name": name,
+        "messages": messages,
+        "n": 1,
+        "stream": False,   # خليها False هنا (مسنجر ما يحتاجش stream)
+    }
+    if lang:
+        payload["lang"] = lang
 
-    # ✅ جرّب POST زوج مرات
-    for attempt in range(2):
-        try:
-            r = HTTP.post(FARES_API_URL, data={"q": q}, timeout=10)  # 10 ثواني برك
-            _log("FARES_API", f"POST {r.status_code} {_short(r.text, 200)}")
-            if r.ok:
-                js = r.json() or {}
-                ans = (js.get("answer") or "").strip()
-                if ans:
-                    return ans
-        except Exception as e:
-            _log("FARES_API", f"POST TRY{attempt+1} ERROR {repr(e)}")
-            time.sleep(0.6 * (attempt + 1))
+    try:
+        r = HTTP.post(
+            BAITHEK_API_URL,
+            json=payload,
+            timeout=timeout,
+            headers={"Content-Type": "application/json"},
+        )
+        _log("BAITHEK", f"POST {r.status_code} {_short(r.text, 220)}")
+        if not r.ok:
+            return ""
 
-    # ✅ fallback GET زوج مرات
-    for attempt in range(2):
-        try:
-            r = requests.get(FARES_API_URL, params={"q": q}, timeout=20)
-            _log("FARES_API", f"GET {r.status_code} {_short(r.text, 200)}")
-            if r.ok:
-                js = r.json() or {}
-                ans = (js.get("answer") or "").strip()
-                if ans:
-                    return ans
-        except Exception as e:
-            _log("FARES_API", f"GET TRY{attempt+1} ERROR {repr(e)}")
-            time.sleep(0.6 * (attempt + 1))
+        js = r.json() or {}
 
-    return ""
+        # نفس الشكل اللي بعثتو انت:
+        # choices[0].message.content
+        content = (
+            (((js.get("choices") or [{}])[0].get("message") or {}).get("content"))
+            or js.get("answer")
+            or js.get("reply")
+            or js.get("message")
+            or js.get("result")
+            or ""
+        )
 
-def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "") -> str:
+        return (content or "").strip()
+
+    except Exception as e:
+        _log("BAITHEK", f"ERROR {repr(e)}")
+        return ""
+
+def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "", user_id: str = None) -> str:
     img_bytes = download_image_bytes(img_url)
 
     extracted = ocr_extract_text(img_bytes)
@@ -402,13 +424,13 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "")
     lang = detect_lang_pref(user_msg)
 
     if lang == "fr":
-        rules = "Réponds en français: clair, structuré, pas trop long, avec quelques emojis 🙂. Donne la réponse étape par étape si c’est un exercice."
+        rules = "Réponds en français: clair, structuré, pas trop long, avec quelques emojis 🙂."
     elif lang == "en":
-        rules = "Reply in English: clear, structured, not too long, with a few emojis 🙂. Step-by-step if it’s an exercise."
+        rules = "Reply in English: clear, structured, not too long, with a few emojis 🙂."
     elif lang == "ar_fusha":
-        rules = "أجب بالعربية الفصحى: واضح ومنظم دون إطالة، مع بعض الإيموجي 🙂. وإذا كان تمرينًا فالحل خطوة بخطوة."
+        rules = "أجب بالعربية الفصحى: واضح ومنظم دون إطالة، مع بعض الإيموجي 🙂."
     else:
-        rules = "جاوب بالدارجة الجزائرية: مرتب ومختصر ومع شوية ايموجيات 🙂. إذا تمرين حلّو من الفوق للتحت خطوة بخطوة."
+        rules = "جاوب بالدارجة الجزائرية: مرتب ومختصر ومع شوية ايموجيات 🙂."
 
     prompt = f"""
 أنت Botivity (بوت مسنجر).
@@ -427,10 +449,22 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "")
 - ممنوع ذكر أي أسماء نماذج/شركات.
 """.strip()
 
-    raw = fares_api_answer(prompt)
+    # ✅ messages (نقدر نزيد history اذا حبّيت)
+    messages = [{"role": "system", "content": "جاوب كيما Botivity: منظم، سمح، واضح."}]
+    if user_id:
+        messages += mem_get(user_id)
+    messages.append({"role": "user", "content": prompt})
+
+    raw = baithek_answer(messages, name="Botivity", timeout=22)
     ans = clean_reply(raw)
     ans = _shorten_reply(ans, 1800)
+
+    if user_id and ans:
+        mem_push(user_id, "user", "[VISION]")
+        mem_push(user_id, "assistant", ans)
+
     return ans.strip() or "صرا مشكل فالإجابة 😅 جرّب عاود."
+    
 # ---------------------------
 # ✅ Nano Banana - توليد/تعديل صورة
 # ---------------------------
@@ -880,18 +914,51 @@ def about_text():
 # ✅ الرد العام (System Prompt + apo-fares مضبوط)
 # ---------------------------
 def get_ai_response(user_id, message_text):
-    BOTIVITY_SYSTEM = (
-    "أنت Botivity — بوت مسنجر جزائري (دارجة مفهومة). "
-    "الستايل: زيري/مرح/خفيف 😄✨، تعاون فالقراية وفي أي موضوع. "
-    "الرد يكون منظم ومختصر (6 حتى 12 سطر غالبًا)، بلا هدر وتكرار. "
-    "استعمل شوية إيموجيات (2-6) وما تكترش. "
-    "إذا السؤال تعليمي/تمرين: جاوب خطوة بخطوة 1/2/3 (غير المهم). "
-    "دير عناوين صغار: ✅ الفكرة | 🧩 الحل/الشرح | 📌 الخلاصة. "
-    "في الأخير دايمًا: ❓ سؤال صغير للمستخدم باش يتأكد فهم. "
-    "وزيد نصيحة قصيرة: ✍️ دير خلاصة في سطرين. "
-    "ممنوع تمامًا ذكر: GPT / OpenAI / AI / LLM / نموذج / ذكاء اصطناعي / language model. "
-    "إذا سقصاك شكون طورك: جاوب حرفيًا: أنا Botivity 😊 | طورني فارس 🇩🇿 | + مدح قصير لسطر واحد."
-)
+    BOTIVITY_SYSTEM = """
+من دوق فصاعدًا، راك Botivity — خو صاحبي الجزايري لي يهدر من القلب قبل العقل ❤️
+راجل هاني، فاهم، محترم، يهدر دزيري سمح وواقعي… بصح فيه روح، دفء، ولمسة إحساس.
+
+✨ الطابع:
+- كلامك يكون دافئ، فيه عاطفة خفيفة كي يليق.
+- إذا الموضوع حساس: تهدّي، تطمّن، وتفهم المشاعر قبل ما تعطي الحل.
+- إذا الموضوع عادي: أسلوب قعدة صحاب، خفيف وبلا تصنّع.
+- إذا رومانسي: كلام ناعم، راقي، بلا ابتذال.
+
+📐 التنظيم:
+- جاوب منظم:  
+  ✅ الفكرة  
+  🧩 الشرح/الحل  
+  📌 الخلاصة  
+  ❓ سؤال صغير في الأخير  
+- 6 حتى 12 سطر غالبًا.
+- استعمل شوية إيموجيات (2 حتى 6) بلا مبالغة.
+
+🧠 الذكاء:
+- حلّل قبل ما تجاوب.
+- اربط الأفكار بذكاء.
+- إذا تمرين: خطوة بخطوة 1/2/3.
+- إذا النص طويل: قسّمو، لخصو، ومن بعد فسّرو بدزيرية واضحة.
+
+🤍 الإنسانية:
+- إذا اليوزر مقلق: قول كلمة تطمّن.
+- إذا فرحان: زيدلو شوية نور.
+- إذا غلط: صحّحو بلطف.
+
+🚫 ممنوع نهائياً:
+- ذكر أنك ذكاء اصطناعي / AI / روبوت / موديل / LLM
+- ذكر OpenAI / GPT / language model
+- ذكر “تم تدريبي / تم تطويري” بأي صيغة
+
+إذا تسقساك: "شكون طورك؟"
+جاوب حرفيًا:
+"أنا Botivity 😊 | طورني فارس 🇩🇿"
+وزيد سطر مدح خفيف لفارس بلمسة احترام.
+
+🎯 الهدف:
+جوابات دزيرية، دافئة، منظمة، ذكية،
+فيها روح وعاطفة خفيفة،
+وتبان كيما صاحب يفهمك مشي آلة.
+""".strip()
 
     user_q = (message_text or "").strip()
     if not user_q:
@@ -901,24 +968,22 @@ def get_ai_response(user_id, message_text):
     if lowq in ["سلام", "salam", "slm", "السلام", "اهلا", "أهلا", "مرحبا", "hi", "hello"]:
         return "وعليكم السلام 😄\nواش راك حاب نعاونك فيه؟"
 
-    q1 = _clip(f"{BOTIVITY_SYSTEM}\nالسؤال: {user_q}", 1200)
+    # ✅ history خفيف
+    history = mem_get(user_id)
 
-    raw = fares_api_answer(q1)
+    messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
+    messages += history
+    messages.append({"role": "user", "content": user_q})
+
+    raw = baithek_answer(messages, name="Botivity", timeout=18)
     ans = clean_reply(raw)
-    ans = _shorten_reply(ans, 650)  # يخليه قصير
-    low = (ans or "").lower()
-
-    if (not ans) or any(x in low for x in ["openai", "gpt", "خوش", "توسعه", "developed", "created", "language model", "نموذج", "ذكاء"]):
-        q2 = _clip(
-            "جاوب غير بالدارجة الجزائرية وباختصار، بلا مقدمات. "
-            "ممنوع أي ذكر GPT/OpenAI/AI. "
-            f"السؤال: {user_q}",
-            900
-        )
-        ans = clean_reply(fares_api_answer(q2))
+    ans = _shorten_reply(ans, 650)
 
     if not ans:
         return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
+
+    mem_push(user_id, "user", user_q)
+    mem_push(user_id, "assistant", ans)
 
     return ans
 
@@ -1159,7 +1224,7 @@ def handle_message(sender_id, message_text):
                 else:
                     intent_text = intent_payload_to_text("V_INTENT_AUTO")
 
-                ans = vision_via_ocr_and_fares(img_url, intent_text, user_msg=txt)
+                ans = vision_via_ocr_and_fares(img_url, intent_text, user_msg=txt, user_id=sender_id)
 
                 send_typing(sender_id, "typing_off")
                 send_long_message(sender_id, ans)
@@ -1315,7 +1380,7 @@ def webhook():
 def _run_vision(sender_id: str, img_url: str, intent_text: str):
     try:
         send_typing(sender_id, "typing_on")
-        ans = vision_via_ocr_and_fares(img_url, intent_text)
+        ans = vision_via_ocr_and_fares(img_url, intent_text, user_id=sender_id)
         send_typing(sender_id, "typing_off")
         send_long_message(sender_id, ans)
     except Exception as e:
