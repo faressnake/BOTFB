@@ -395,22 +395,48 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
 
     headers = {
         "Content-Type": "application/json",
+        "Accept": "application/json",
         "User-Agent": "Botivity/1.0",
     }
 
-    # ✅ نجرب 3 مرات قبل ما نقول صرا مشكل
     for attempt in range(3):
         try:
             with BAITHEK_SEM:
-                r = HTTP.post(BAITHEK_API_URL, json=payload, timeout=timeout, headers=headers)
+                r = HTTP.post(
+                    BAITHEK_API_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=(10, timeout),  # connect, read
+                )
 
-            _log("BAITHEK", f"POST {r.status_code} {_short(r.text, 220)}")
+            body = (r.text or "").strip()
+            ct = (r.headers.get("content-type") or "")
 
+            _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
+            _log("BAITHEK", f"BODY {_short(body, 220)}")
+
+            # ✅ لو ماشي OK نعاود
             if not r.ok:
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
 
-            js = r.json() or {}
+            # ✅ إذا فارغ نعاود
+            if not body:
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
+
+            # ✅ إذا ماشي JSON نعاود
+            if not body.startswith("{") and not body.startswith("["):
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
+
+            # ✅ parse JSON بأمان
+            try:
+                js = r.json() or {}
+            except Exception:
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
+
             content = (
                 (((js.get("choices") or [{}])[0].get("message") or {}).get("content"))
                 or js.get("answer")
