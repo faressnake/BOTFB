@@ -10,6 +10,7 @@ HTTP.headers.update({
     "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.7,en;q=0.6",
+    "Accept-Encoding": "gzip, deflate",
     "Referer": "https://baithek.com/",
     "Origin": "https://baithek.com",
 })
@@ -401,12 +402,13 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
         payload["lang"] = lang
 
     headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
-        "Referer": "https://baithek.com/",
-        "Origin": "https://baithek.com",
-    }
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Encoding": "gzip, deflate",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
+    "Referer": "https://baithek.com/",
+    "Origin": "https://baithek.com",
+}
 
     for attempt in range(3):
         try:
@@ -1439,19 +1441,24 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
 
 @app.route("/debug-baithek", methods=["GET"])
 def debug_baithek():
-    msgs = [{"role":"user","content":"سلام"}]
+    msgs = [{"role": "user", "content": "سلام"}]
     try:
         r = HTTP.post(
             BAITHEK_API_URL,
-            json={"name":"Botivity","messages":msgs,"n":1,"stream":False},
+            json={"name": "Botivity", "messages": msgs, "n": 1, "stream": False},
             timeout=25
         )
+
         return jsonify({
             "ok": r.ok,
             "status": r.status_code,
             "ct": r.headers.get("content-type"),
-            "first200": (r.text or "")[:200]
+            "ce": r.headers.get("content-encoding"),
+            "len_bytes": len(r.content or b""),
+            "final_url": getattr(r, "url", None),
+            "first300_bytes_b64": base64.b64encode((r.content or b"")[:300]).decode("utf-8")
         }), 200
+
     except Exception as e:
         return jsonify({"error": repr(e)}), 500
         
