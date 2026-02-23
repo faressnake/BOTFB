@@ -7,6 +7,18 @@ import base64
 import json
 import re
 import random
+import io
+try:
+    from PIL import Image, ImageOps, ImageEnhance
+except Exception:
+    Image = None
+    ImageOps = None
+    ImageEnhance = None
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -372,16 +384,27 @@ def fares_api_answer(q: str) -> str:
 
     return ""
 
-def vision_via_ocr_and_fares(img_url: str, intent_text: str) -> str:
+def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "") -> str:
     img_bytes = download_image_bytes(img_url)
 
     extracted = ocr_extract_text(img_bytes)
     if not extracted.strip():
-        return "ما قدرتش نقرأ النص من الصورة 😅\nجرّب صورة أوضح/قريبة وبلا ظل."
+        return "ما قدرتش نقرأ النص من الصورة 😅\nجرّب قرّب للصورة/زيد الإضاءة/بلا ظل."
+
+    lang = detect_lang_pref(user_msg)
+
+    if lang == "fr":
+        rules = "Réponds en français: clair, structuré, pas trop long, avec quelques emojis 🙂. Donne la réponse étape par étape si c’est un exercice."
+    elif lang == "en":
+        rules = "Reply in English: clear, structured, not too long, with a few emojis 🙂. Step-by-step if it’s an exercise."
+    elif lang == "ar_fusha":
+        rules = "أجب بالعربية الفصحى: واضح ومنظم دون إطالة، مع بعض الإيموجي 🙂. وإذا كان تمرينًا فالحل خطوة بخطوة."
+    else:
+        rules = "جاوب بالدارجة الجزائرية: مرتب ومختصر ومع شوية ايموجيات 🙂. إذا تمرين حلّو من الفوق للتحت خطوة بخطوة."
 
     prompt = f"""
-أنت Botivity (بوت جزائري).
-هذا نص مستخرج من صورة بـ OCR.
+أنت Botivity (بوت مسنجر).
+عندك نص مستخرج من صورة.
 
 المطلوب:
 {intent_text}
@@ -389,15 +412,16 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str) -> str:
 النص:
 {extracted}
 
-✅ قواعد:
-- جاوب بالدارجة الجزائرية المفهومة.
-- إذا تمرين: حل خطوة بخطوة.
-- دير عناوين واضحة وفي الاخر: 📌 الخلاصة
-- ممنوع ذكر GPT/OpenAI/AI/LLM.
+قواعد:
+- {rules}
+- عناوين قصيرة.
+- في الآخر: 📌 الخلاصة.
+- ممنوع ذكر أي أسماء نماذج/شركات.
 """.strip()
 
     raw = fares_api_answer(prompt)
     ans = clean_reply(raw)
+    ans = _shorten_reply(ans, 1800)
     return ans.strip() or "صرا مشكل فالإجابة 😅 جرّب عاود."
 # ---------------------------
 # ✅ Nano Banana - توليد/تعديل صورة
@@ -491,19 +515,101 @@ def to_data_url(image_bytes: bytes) -> str:
     return f"data:{mime};base64,{b64}"
 
 # ---------------------------
+# ✅ Language detect (AR/DZ/FR/EN)
+# ---------------------------
+def detect_lang_pref(txt: str) -> str:
+    t = (txt or "").lower()
+
+    # طلب صريح
+    if "بالفرنسية" in t or "français" in t or "francais" in t:
+        return "fr"
+    if "بالانجليزية" in t or "english" in t:
+        return "en"
+    if "بالفصحى" in t or "فصحى" in t:
+        return "ar_fusha"
+
+    # كشف سريع
+    fr_hits = [" je ", " tu ", " vous", " pour", " avec", " merci", " s'il", " salut", " bonjour"]
+    en_hits = [" what", " how", " please", " solve", " answer", " english", " thanks", " hi "]
+    if any(x in t for x in fr_hits): return "fr"
+    if any(x in t for x in en_hits): return "en"
+    return "dz"
+
+
+# ---------------------------
+# ✅ OCR Preprocess (makes low-quality images readable)
+# ---------------------------
+def preprocess_for_ocr(image_bytes: bytes) -> bytes:
+    if Image is None:
+        return image_bytes
+
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    w, h = img.size
+    if max(w, h) < 1200:
+        img = img.resize((w * 2, h * 2))
+
+    img = ImageOps.grayscale(img)
+    img = ImageEnhance.Contrast(img).enhance(2.0)
+    img = img.point(lambda x: 255 if x > 150 else 0)
+
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
+
+
+def ocr_tesseract(image_bytes: bytes) -> str:
+    if (Image is None) or (pytesseract is None):
+        return ""
+    pre = preprocess_for_ocr(image_bytes)
+    img = Image.open(io.BytesIO(pre))
+    txt = pytesseract.image_to_string(img, lang="ara+eng+fra")
+    return (txt or "").strip()
+
+
+# ---------------------------
+# ✅ Make answers shorter + nicer
+# ---------------------------
+def _shorten_reply(text: str, max_chars: int = 1800) -> str:
+    t = (text or "").strip()
+    if not t:
+        return t
+    if len(t) <= max_chars:
+        return t
+
+    # try cut at a safe boundary
+    cut = t.rfind("\n", 0, max_chars)
+    if cut < 800:
+        cut = max_chars
+    return (t[:cut].strip() + "\n\n…")
+    
+# ---------------------------
 # ✅ OCR (fallback)
 # ---------------------------
+
 def ocr_extract_text(image_bytes: bytes) -> str:
+    # ✅ حضّر الصورة (ينفع لـ tesseract و OCR.Space)
+    pre = preprocess_for_ocr(image_bytes)
+
+    # 1) ✅ OCR محلي (إذا متوفر)
+    try:
+        t = ocr_tesseract(image_bytes)
+        if t and len(t) > 10:
+            _log("OCR", f"TESS OK len={len(t)}")
+            return t
+    except Exception as e:
+        _log("OCR", f"TESS FAIL {repr(e)}")
+
+    # 2) ✅ fallback OCR.Space
     if not OCR_SPACE_API_KEY:
-        _log("OCR", "SKIP: OCR_SPACE_API_KEY empty")
+        _log("OCR", "OCR_SPACE_API_KEY empty + tesseract failed")
         return ""
 
     url = "https://api.ocr.space/parse/image"
 
-    mime = guess_mime(image_bytes)
+    mime = guess_mime(pre)
     filename = "image.png" if mime == "image/png" else "image.jpg"
-    files = {"file": (filename, image_bytes, mime)}
-
+    files = {"file": (filename, pre, mime)}
     headers = {"apikey": OCR_SPACE_API_KEY}
 
     def _do(lang: str) -> str:
@@ -522,19 +628,19 @@ def ocr_extract_text(image_bytes: bytes) -> str:
             return ""
         js = res.json() or {}
         if js.get("IsErroredOnProcessing"):
-            em = js.get("ErrorMessage") or []
-            if any("E201" in str(x) for x in em):
-                return "__E201__"
             return ""
         parsed = js.get("ParsedResults") or []
         if not parsed:
             return ""
         return (parsed[0].get("ParsedText") or "").strip()
 
+    # ✅ جرّب لغات بالتوالي (مش غير E201)
     t = _do("ara")
-    if t == "__E201__":
+    if not t:
         t = _do("eng")
-    return "" if t == "__E201__" else (t or "")
+    if not t:
+        t = _do("fre")
+    return t or ""
 # ---------------------------
 # ✅ Weather + Prayer
 # ---------------------------
@@ -767,13 +873,17 @@ def about_text():
 # ---------------------------
 def get_ai_response(user_id, message_text):
     BOTIVITY_SYSTEM = (
-        "أنت Botivity — بوت مسنجر جزائري. "
-        "جاوب بدارجة جزائرية مفهومة (وفصحى مبسطة غير كي يلزم). "
-        "خليك خفيف وضريف ومفيد، بلا مقدمات طويلة. "
-        "إذا تمرين/مسألة: حل خطوة بخطوة 1/2/3 غير كي يلزم. "
-        "ممنوع ذكر: GPT, OpenAI, AI, LLM, نموذج. "
-        "إذا سقصاك شكون طورك: جاوب حرفيا: أنا Botivity 😊 | طورني فارس 🇩🇿 | + مدح قصير لسطر واحد."
-    )
+    "أنت Botivity — بوت مسنجر جزائري (دارجة مفهومة). "
+    "الستايل: زيري/مرح/خفيف 😄✨، تعاون فالقراية وفي أي موضوع. "
+    "الرد يكون منظم ومختصر (6 حتى 12 سطر غالبًا)، بلا هدر وتكرار. "
+    "استعمل شوية إيموجيات (2-6) وما تكترش. "
+    "إذا السؤال تعليمي/تمرين: جاوب خطوة بخطوة 1/2/3 (غير المهم). "
+    "دير عناوين صغار: ✅ الفكرة | 🧩 الحل/الشرح | 📌 الخلاصة. "
+    "في الأخير دايمًا: ❓ سؤال صغير للمستخدم باش يتأكد فهم. "
+    "وزيد نصيحة قصيرة: ✍️ دير خلاصة في سطرين. "
+    "ممنوع تمامًا ذكر: GPT / OpenAI / AI / LLM / نموذج / ذكاء اصطناعي / language model. "
+    "إذا سقصاك شكون طورك: جاوب حرفيًا: أنا Botivity 😊 | طورني فارس 🇩🇿 | + مدح قصير لسطر واحد."
+)
 
     user_q = (message_text or "").strip()
     if not user_q:
@@ -906,13 +1016,14 @@ def who_made_you_reply():
     ]
     return f"أنا بوت 😊\nطورني فارس 🇩🇿\n{random.choice(praises)}"
 
-def who_is_fares_reply():
-    bios = [
-        "فارس 🇩🇿 مطوّر جزائري يحب البرمجة ويبني مشاريع مفيدة 🚀",
-        "فارس 🇩🇿 واحد يعشق التقنية ويخدم بوتات ومواقع 🔥",
-        "فارس 🇩🇿 مطوّر يحب الجودة ويحب الناس تستافد ✨"
-    ]
-    return f"{random.choice(bios)}\nهذا المشروع خدمتو هو بنفسو 💪"
+def who_is_fares_reply(lang: str = "dz"):
+    if lang == "fr":
+        return "👨‍💻 Fares 🇩🇿 est le développeur de Botivity.\nهو اللي صمّم وخدّم البوت كامل من الصفر 💪✨"
+    if lang == "en":
+        return "👨‍💻 Fares 🇩🇿 is the developer of Botivity.\nHe built the bot from scratch 💪✨"
+    if lang == "ar_fusha":
+        return "👨‍💻 فارس 🇩🇿 هو مطوّر بوت Botivity، وقد قام بإنشائه وبرمجته بالكامل من الصفر 💪✨"
+    return "👨‍💻 فارس 🇩🇿 هو اللي خدم Botivity كامل وبرمج البوت من الصفر 💪✨"
   
 def help_text():
     return (
@@ -1039,7 +1150,7 @@ def handle_message(sender_id, message_text):
                 else:
                     intent_text = intent_payload_to_text("V_INTENT_AUTO")
 
-                ans = vision_via_ocr_and_fares(img_url, intent_text)
+                ans = vision_via_ocr_and_fares(img_url, intent_text, user_msg=txt)
 
                 send_typing(sender_id, "typing_off")
                 send_long_message(sender_id, ans)
