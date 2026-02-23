@@ -401,56 +401,46 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
         payload["lang"] = lang
 
     headers = {
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/plain, */*",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Referer": "https://baithek.com/",
-    "Origin": "https://baithek.com"
-}
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
+        "Referer": "https://baithek.com/",
+        "Origin": "https://baithek.com",
+    }
 
     for attempt in range(3):
-    try:
-        with BAITHEK_SEM:
-            r = HTTP.post(
-                BAITHEK_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=(10, timeout),
-            )
+        try:
+            with BAITHEK_SEM:
+                r = HTTP.post(
+                    BAITHEK_API_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=(10, timeout),
+                )
 
-        # ✅ هنا بالضبط (نفس مستوى body/ct)
-        print("STATUS:", r.status_code)
-        print("CT:", r.headers.get("content-type"))
-        print("BODY_FIRST200:", (r.text or "")[:200])
-
-        body = (r.text or "").strip()
-        ct = (r.headers.get("content-type") or "")
-
-        _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
-        _log("BAITHEK", f"BODY {_short(body, 220)}")
+            # ✅ LOGS (لازم داخل for/try)
+            print("STATUS:", r.status_code)
+            print("CT:", r.headers.get("content-type"))
+            print("BODY_FIRST200:", (r.text or "")[:200])
 
             body = (r.text or "").strip()
-            ct = (r.headers.get("content-type") or "")
+            ct = (r.headers.get("content-type") or "").lower()
 
             _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
             _log("BAITHEK", f"BODY {_short(body, 220)}")
 
-            # ✅ لو ماشي OK نعاود
-            if not r.ok:
+            if not r.ok or not body:
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
 
-            # ✅ إذا فارغ نعاود
-            if not body:
+            if "text/html" in ct:
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
 
-            # ✅ إذا ماشي JSON نعاود
             if not body.startswith("{") and not body.startswith("["):
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
 
-            # ✅ parse JSON بأمان
             try:
                 js = r.json() or {}
             except Exception:
