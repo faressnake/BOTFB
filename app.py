@@ -52,6 +52,12 @@ def _log(tag: str, msg: str):
 def _short(s: str, n: int = 700):
     s = s or ""
     return s[:n]
+    
+def _clip(s: str, n: int = 900) -> str:
+    s = (s or "").strip()
+    if len(s) <= n:
+        return s
+    return s[:n].strip()
 
 def _sleep_backoff(attempt: int, retry_after: str = None):
     try:
@@ -356,29 +362,35 @@ HTTP = requests.Session()
 def fares_api_answer(q: str) -> str:
     q = _clip(q, 900)  # قصّر prompt باش يجي الرد أسرع
 
+    # ✅ جرّب POST زوج مرات
+    for attempt in range(2):
         try:
-        r = HTTP.post(FARES_API_URL, data={"q": q}, timeout=10)  # 10 ثواني برك
-        _log("FARES_API", f"POST {r.status_code} {_short(r.text, 200)}")
-        if r.ok:
-            js = r.json() or {}
-            return (js.get("answer") or "").strip()
-    except Exception as e:
-        _log("FARES_API", f"ERROR {repr(e)}")
-
-        return ""
-
-        # ✅ fallback GET
-        try:
-            r = requests.get(FARES_API_URL, params={"q": q}, timeout=60)
-            _log("FARES_API", f"GET STATUS={r.status_code} BODY={_short(r.text, 300)}")
-            r.raise_for_status()
-            js = r.json() or {}
-            return (js.get("answer") or "").strip()
+            r = HTTP.post(FARES_API_URL, data={"q": q}, timeout=10)  # 10 ثواني برك
+            _log("FARES_API", f"POST {r.status_code} {_short(r.text, 200)}")
+            if r.ok:
+                js = r.json() or {}
+                ans = (js.get("answer") or "").strip()
+                if ans:
+                    return ans
         except Exception as e:
-            _log("FARES_API", f"GET TRY{attempt+1} ERROR: {repr(e)}")
+            _log("FARES_API", f"POST TRY{attempt+1} ERROR {repr(e)}")
             time.sleep(0.6 * (attempt + 1))
 
-        return ""
+    # ✅ fallback GET زوج مرات
+    for attempt in range(2):
+        try:
+            r = requests.get(FARES_API_URL, params={"q": q}, timeout=20)
+            _log("FARES_API", f"GET {r.status_code} {_short(r.text, 200)}")
+            if r.ok:
+                js = r.json() or {}
+                ans = (js.get("answer") or "").strip()
+                if ans:
+                    return ans
+        except Exception as e:
+            _log("FARES_API", f"GET TRY{attempt+1} ERROR {repr(e)}")
+            time.sleep(0.6 * (attempt + 1))
+
+    return ""
 
 def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "") -> str:
     img_bytes = download_image_bytes(img_url)
