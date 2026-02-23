@@ -2,6 +2,25 @@ import os
 import time
 import threading
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+HTTP = requests.Session()
+
+_retry = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=0.7,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["POST", "GET"]
+)
+
+_adapter = HTTPAdapter(max_retries=_retry, pool_connections=50, pool_maxsize=50)
+HTTP.mount("https://", _adapter)
+HTTP.mount("http://", _adapter)
+
+BAITHEK_SEM = threading.Semaphore(3)
 import datetime
 import base64
 import json
@@ -28,7 +47,6 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 
 # ✅ خليه
 BAITHEK_API_URL = os.getenv("BAITHEK_API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
-HTTP = requests.Session()
 
 # ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
@@ -367,52 +385,47 @@ def clean_reply(text: str) -> str:
     return cleaned
 
 # ---------------------------
-def baithek_answer(messages, name="Botivity", lang=None, timeout=35) -> str:
-    """
-    messages: list of {role:'system'|'user'|'assistant', content:'...'}
-    يرجّع نص الرد فقط.
-    """
+def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
     if not BAITHEK_API_URL:
         return ""
 
-    payload = {
-        "name": name,
-        "messages": messages,
-        "n": 1,
-        "stream": False,   # خليها False هنا (مسنجر ما يحتاجش stream)
-    }
+    payload = {"name": name, "messages": messages, "n": 1, "stream": False}
     if lang:
         payload["lang"] = lang
 
-    try:
-        r = HTTP.post(
-            BAITHEK_API_URL,
-            json=payload,
-            timeout=timeout,
-            headers={"Content-Type": "application/json"},
-        )
-        _log("BAITHEK", f"POST {r.status_code} {_short(r.text, 220)}")
-        if not r.ok:
-            return ""
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Botivity/1.0",
+    }
 
-        js = r.json() or {}
+    # ✅ نجرب 3 مرات قبل ما نقول صرا مشكل
+    for attempt in range(3):
+        try:
+            with BAITHEK_SEM:
+                r = HTTP.post(BAITHEK_API_URL, json=payload, timeout=timeout, headers=headers)
 
-        # نفس الشكل اللي بعثتو انت:
-        # choices[0].message.content
-        content = (
-            (((js.get("choices") or [{}])[0].get("message") or {}).get("content"))
-            or js.get("answer")
-            or js.get("reply")
-            or js.get("message")
-            or js.get("result")
-            or ""
-        )
+            _log("BAITHEK", f"POST {r.status_code} {_short(r.text, 220)}")
 
-        return (content or "").strip()
+            if not r.ok:
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
 
-    except Exception as e:
-        _log("BAITHEK", f"ERROR {repr(e)}")
-        return ""
+            js = r.json() or {}
+            content = (
+                (((js.get("choices") or [{}])[0].get("message") or {}).get("content"))
+                or js.get("answer")
+                or js.get("reply")
+                or js.get("message")
+                or js.get("result")
+                or ""
+            )
+            return (content or "").strip()
+
+        except Exception as e:
+            _log("BAITHEK", f"TRY {attempt+1}/3 ERROR {repr(e)}")
+            _sleep_backoff(attempt)
+
+    return ""
 
 def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "", user_id: str = None) -> str:
     img_bytes = download_image_bytes(img_url)
@@ -455,7 +468,7 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "",
         messages += mem_get(user_id)
     messages.append({"role": "user", "content": prompt})
 
-    raw = baithek_answer(messages, name="Botivity", timeout=22)
+    raw = baithek_answer(messages, name="Botivity", timeout=30)
     ans = clean_reply(raw)
     ans = _shorten_reply(ans, 1800)
 
@@ -975,7 +988,7 @@ def get_ai_response(user_id, message_text):
     messages += history
     messages.append({"role": "user", "content": user_q})
 
-    raw = baithek_answer(messages, name="Botivity", timeout=18)
+    raw = baithek_answer(messages, name="Botivity", timeout=25)
     ans = clean_reply(raw)
     ans = _shorten_reply(ans, 650)
 
