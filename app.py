@@ -1437,6 +1437,24 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
         send_typing(sender_id, "typing_off")
         send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
 
+@app.route("/debug-baithek", methods=["GET"])
+def debug_baithek():
+    msgs = [{"role":"user","content":"سلام"}]
+    try:
+        r = HTTP.post(
+            BAITHEK_API_URL,
+            json={"name":"Botivity","messages":msgs,"n":1,"stream":False},
+            timeout=25
+        )
+        return jsonify({
+            "ok": r.ok,
+            "status": r.status_code,
+            "ct": r.headers.get("content-type"),
+            "first200": (r.text or "")[:200]
+        }), 200
+    except Exception as e:
+        return jsonify({"error": repr(e)}), 500
+        
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
