@@ -10,8 +10,6 @@ HTTP.headers.update({
     "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.7,en;q=0.6",
-    "Referer": "https://baithek.com/",
-    "Origin": "https://baithek.com",
 })
 
 _retry = Retry(
@@ -27,7 +25,6 @@ _adapter = HTTPAdapter(max_retries=_retry, pool_connections=50, pool_maxsize=50)
 HTTP.mount("https://", _adapter)
 HTTP.mount("http://", _adapter)
 
-BAITHEK_SEM = threading.Semaphore(3)
 import datetime
 import base64
 import json
@@ -52,24 +49,7 @@ app = Flask(__name__)
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "faresdz123")
 
-# ✅ خليه
-BAITHEK_API_URL = os.getenv("BAITHEK_API_URL", "https://baithek.com/chatbee/health_ai/ai_vision.php")
-HOME_URL   = "https://baithek.com/"
-WARMUP_URL = "https://baithek.com/index.php?i=1"
-
-def baithek_warmup():
-    try:
-        h = {
-            "User-Agent": HTTP.headers.get("User-Agent", ""),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": HTTP.headers.get("Accept-Language", "ar-DZ,ar;q=0.9"),
-            "Referer": "https://baithek.com/",
-        }
-        HTTP.get(HOME_URL, headers=h, timeout=15)
-        HTTP.get(WARMUP_URL, headers=h, timeout=15)
-        _log("BAITHEK", f"warmup OK cookies={len(HTTP.cookies)}")
-    except Exception as e:
-        _log("BAITHEK", f"warmup FAIL {repr(e)}")
+CLAUDE45_URL = os.getenv("CLAUDE45_URL", "http://apo-fares.abrdns.com/Claude-Sonnet-4.5.php").strip()
 
 # ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
@@ -122,8 +102,7 @@ def _sleep_backoff(attempt: int, retry_after: str = None):
         pass
     time.sleep(min(1.0 * (2 ** attempt), 12))
     
-HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-HF_TEXT_MODEL = os.getenv("HF_TEXT_MODEL", "HuggingFaceH4/zephyr-7b-beta").strip()
+
 
 def _messages_to_prompt(messages):
     lines = []
@@ -141,47 +120,44 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def hf_answer(messages, timeout=35) -> str:
-    if not HF_TOKEN:
+def claude45_answer(messages, timeout=45) -> str:
+    if not CLAUDE45_URL:
         return ""
-
-    url = "https://router.huggingface.co/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
 
     prompt = _messages_to_prompt(messages)
 
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 380,
-            "temperature": 0.7,
-            "return_full_text": False,
-        },
-        "options": {"wait_for_model": True}
-    }
-
     for attempt in range(4):
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-            ct = (r.headers.get("content-type") or "").lower()
-            _log("HF", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
-            if r.status_code in (429, 503):
+            r = HTTP.post(
+                CLAUDE45_URL,
+                data={"message": prompt},
+                timeout=(10, timeout),
+                allow_redirects=True
+            )
+
+            body = (r.text or "").strip()
+            _log("CLAUDE45", f"POST {r.status_code} ct={(r.headers.get('content-type') or '')} len={len(r.content or b'')}")
+            _log("CLAUDE45", f"BODY {_short(body, 250)}")
+
+            if r.status_code in (429, 500, 502, 503, 504):
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
                 continue
+
             r.raise_for_status()
 
-            js = r.json()
-            if isinstance(js, list) and js and isinstance(js[0], dict):
-                return (js[0].get("generated_text") or "").strip()
-            if isinstance(js, dict):
-                return (js.get("generated_text") or "").strip()
-            return ""
+            try:
+                js = r.json() or {}
+            except Exception:
+                _sleep_backoff(attempt)
+                continue
+
+            if js.get("success") is True:
+                return (js.get("response") or "").strip()
+
+            return (js.get("response") or js.get("answer") or js.get("message") or "").strip()
+
         except Exception as e:
-            _log("HF", f"TRY {attempt+1}/4 ERROR {repr(e)}")
+            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
             _sleep_backoff(attempt)
 
     return ""
@@ -472,82 +448,6 @@ def clean_reply(text: str) -> str:
     return cleaned
 
 # ---------------------------
-def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
-    if not BAITHEK_API_URL:
-        return ""
-
-    payload = {"name": name, "messages": messages, "n": 1, "stream": False}
-    if lang:
-        payload["lang"] = lang
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Encoding": "gzip, deflate",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Mobile Safari/537.36",
-        "Accept-Language": "ar-DZ,ar;q=0.9,en-US;q=0.7,en;q=0.6",
-        "Referer": "https://baithek.com/",
-        "Origin": "https://baithek.com",
-        "X-Requested-With": "XMLHttpRequest",
-    }
-
-    # ✅ warmup مرة قبل المحاولة الأولى (باش يجيب cookies)
-    baithek_warmup()
-
-    for attempt in range(3):
-        try:
-            with BAITHEK_SEM:
-                r = HTTP.post(
-                    BAITHEK_API_URL,
-                    json=payload,
-                    headers=headers,
-                    timeout=(10, timeout),
-                    allow_redirects=True
-                )
-
-            body = (r.text or "").strip()
-            ct = (r.headers.get("content-type") or "").lower()
-
-            _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
-            _log("BAITHEK", f"BODY {_short(body, 220)}")
-
-            # ✅ إذا رجع HTML ولا فارغ: غالبًا blocked / محتاج cookies
-            if ("text/html" in ct) or (not body):
-                _log("BAITHEK", "blocked/html or empty -> warmup again")
-                baithek_warmup()
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            if not r.ok:
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            if not (body.startswith("{") or body.startswith("[")):
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            try:
-                js = r.json() or {}
-            except Exception:
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            content = (
-                (((js.get("choices") or [{}])[0].get("message") or {}).get("content"))
-                or js.get("answer")
-                or js.get("reply")
-                or js.get("message")
-                or js.get("result")
-                or ""
-            )
-
-            return (content or "").strip()
-
-        except Exception as e:
-            _log("BAITHEK", f"TRY {attempt+1}/3 ERROR {repr(e)}")
-            _sleep_backoff(attempt)
-
-    return ""
     
 def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "", user_id: str = None) -> str:
     img_bytes = download_image_bytes(img_url)
@@ -590,7 +490,7 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "",
         messages += mem_get(user_id)
     messages.append({"role": "user", "content": prompt})
 
-    raw = hf_answer(messages, timeout=45)
+    raw = claude45_answer(messages, timeout=60)
     ans = clean_reply(raw)
     ans = _shorten_reply(ans, 1800)
 
@@ -1110,7 +1010,7 @@ def get_ai_response(user_id, message_text):
     messages += history
     messages.append({"role": "user", "content": user_q})
 
-    raw = hf_answer(messages, timeout=35)
+    raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
     ans = _shorten_reply(ans, 650)
 
@@ -1437,6 +1337,7 @@ def verify():
     if token == VERIFY_TOKEN and challenge:
         return challenge, 200
     return "Error", 403
+
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True) or {}
@@ -1521,40 +1422,6 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
         print("_run_vision error:", repr(e))
         send_typing(sender_id, "typing_off")
         send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
-
-@app.route("/debug-baithek", methods=["GET"])
-def debug_baithek():
-    msgs = [{"role": "user", "content": "سلام"}]
-    try:
-        baithek_warmup()  # ✅ زيدها هنا
-
-        r = HTTP.post(
-            BAITHEK_API_URL,
-            json={"name": "Botivity", "messages": msgs, "n": 1, "stream": False},
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/plain, */*",
-                "User-Agent": HTTP.headers.get("User-Agent", ""),
-                "Referer": "https://baithek.com/",
-                "Origin": "https://baithek.com",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            timeout=25
-        )
-
-        return jsonify({
-            "warmup_cookies": len(HTTP.cookies),
-            "ok": r.ok,
-            "status": r.status_code,
-            "ct": r.headers.get("content-type"),
-            "ce": r.headers.get("content-encoding"),
-            "len_bytes": len(r.content or b""),
-            "final_url": getattr(r, "url", None),
-            "first300": (r.text or "")[:300],
-        }), 200
-
-    except Exception as e:
-        return jsonify({"error": repr(e)}), 500
         
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
