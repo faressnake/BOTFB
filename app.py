@@ -145,7 +145,7 @@ def hf_answer(messages, timeout=35) -> str:
     if not HF_TOKEN:
         return ""
 
-    url = f"https://api-inference.huggingface.co/models/{HF_TEXT_MODEL}"
+    url = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json",
