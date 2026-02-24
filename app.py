@@ -495,7 +495,6 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "",
 
     raw = claude45_answer(messages, timeout=60)
     ans = clean_reply(raw)
-    ans = _shorten_reply(ans, 1800)
 
     if user_id and ans:
         mem_push(user_id, "user", "[VISION]")
@@ -1015,7 +1014,6 @@ def get_ai_response(user_id, message_text):
 
     raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
-    ans = _shorten_reply(ans, 1200)
 
     if not ans:
         return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
