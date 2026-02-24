@@ -310,15 +310,18 @@ def chunk_text(text: str, max_len: int = 1500):
     t = (text or "").strip()
     if not t:
         return []
+
     parts = []
     while len(t) > max_len:
-        cut = t.rfind("\n", 0, max_len)
+        cut = t.rfind(".", 0, max_len)
         if cut < 500:
             cut = max_len
-        parts.append(t[:cut].strip())
-        t = t[cut:].strip()
+        parts.append(t[:cut + 1].strip())
+        t = t[cut + 1:].strip()
+
     if t:
         parts.append(t)
+
     return parts
 
 def send_long_message(recipient_id, text):
@@ -1012,7 +1015,7 @@ def get_ai_response(user_id, message_text):
 
     raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
-    ans = _shorten_reply(ans, 650)
+    ans = _shorten_reply(ans, 1200)
 
     if not ans:
         return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
