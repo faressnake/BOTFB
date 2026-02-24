@@ -65,12 +65,16 @@ def baithek_warmup():
             "Accept-Language": HTTP.headers.get("Accept-Language", "ar-DZ,ar;q=0.9"),
             "Referer": "https://baithek.com/",
         }
-        HTTP.get(HOME_URL, headers=h, timeout=15)
-        HTTP.get(WARMUP_URL, headers=h, timeout=15)
-        _log("BAITHEK", f"warmup OK cookies={len(HTTP.cookies)}")
+
+        r1 = HTTP.get(HOME_URL, headers=h, timeout=15, allow_redirects=True)
+        r2 = HTTP.get(WARMUP_URL, headers=h, timeout=15, allow_redirects=True)
+
+        _log("BAITHEK", f"warmup r1={r1.status_code} ct={r1.headers.get('content-type')} len={len(r1.content or b'')} url={getattr(r1,'url',None)}")
+        _log("BAITHEK", f"warmup r2={r2.status_code} ct={r2.headers.get('content-type')} len={len(r2.content or b'')} url={getattr(r2,'url',None)}")
+        _log("BAITHEK", f"cookies={HTTP.cookies.get_dict()}")
+
     except Exception as e:
         _log("BAITHEK", f"warmup FAIL {repr(e)}")
-
 # ✅ Nano Banana (Text-to-Image + Edit) ✅✅✅
 NANO_BANANA_URL = os.getenv("NANO_BANANA_URL", "https://zecora0.serv00.net/ai/NanoBanana.php")
 
