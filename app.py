@@ -446,12 +446,13 @@ def baithek_answer(messages, name="Botivity", lang=None, timeout=25) -> str:
 
             _log("BAITHEK", f"POST {r.status_code} ct={ct} len={len(r.content or b'')}")
             _log("BAITHEK", f"BODY {_short(body, 220)}")
-# ✅ إذا رجع HTML ولا فارغ: غالبًا blocked / محتاج cookies
-if ("text/html" in ct) or (not body):
-    _log("BAITHEK", "blocked/html or empty -> warmup again")
-    baithek_warmup()
-    _sleep_backoff(attempt, r.headers.get("retry-after"))
-    continue
+
+            # ✅ إذا رجع HTML ولا فارغ: غالبًا blocked / محتاج cookies
+            if ("text/html" in ct) or (not body):
+                _log("BAITHEK", "blocked/html or empty -> warmup again")
+                baithek_warmup()
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
 
             if not r.ok:
                 _sleep_backoff(attempt, r.headers.get("retry-after"))
@@ -475,6 +476,7 @@ if ("text/html" in ct) or (not body):
                 or js.get("result")
                 or ""
             )
+
             return (content or "").strip()
 
         except Exception as e:
@@ -482,7 +484,7 @@ if ("text/html" in ct) or (not body):
             _sleep_backoff(attempt)
 
     return ""
-
+    
 def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "", user_id: str = None) -> str:
     img_bytes = download_image_bytes(img_url)
 
@@ -1477,9 +1479,9 @@ def debug_baithek():
             timeout=25
         )
 
-        return jsonify({
+ return jsonify({
             "warmup_cookies": len(HTTP.cookies),
-     "ok": r.ok,
+            "ok": r.ok,
             "status": r.status_code,
             "ct": r.headers.get("content-type"),
             "ce": r.headers.get("content-encoding"),
@@ -1493,4 +1495,4 @@ def debug_baithek():
         
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port) 
+    app.run(host="0.0.0.0", port=port)
