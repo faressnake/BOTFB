@@ -1466,8 +1466,18 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
 def debug_baithek():
     msgs = [{"role": "user", "content": "سلام"}]
     try:
-        baithek_warmup()
+        # warmup بتسجيل كامل
+        h = {
+            "User-Agent": HTTP.headers.get("User-Agent", ""),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": HTTP.headers.get("Accept-Language", "ar-DZ,ar;q=0.9"),
+            "Referer": "https://baithek.com/",
+        }
 
+        r1 = HTTP.get(HOME_URL, headers=h, timeout=15, allow_redirects=True)
+        r2 = HTTP.get(WARMUP_URL, headers=h, timeout=15, allow_redirects=True)
+
+        # POST
         r = HTTP.post(
             BAITHEK_API_URL,
             json={"name": "Botivity", "messages": msgs, "n": 1, "stream": False},
@@ -1475,6 +1485,7 @@ def debug_baithek():
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/plain, */*",
                 "User-Agent": HTTP.headers.get("User-Agent", ""),
+                "Accept-Language": HTTP.headers.get("Accept-Language", "ar-DZ,ar;q=0.9"),
                 "Referer": "https://baithek.com/",
                 "Origin": "https://baithek.com",
                 "X-Requested-With": "XMLHttpRequest",
@@ -1483,14 +1494,11 @@ def debug_baithek():
         )
 
         return jsonify({
-            "warmup_cookies": len(HTTP.cookies),
-            "ok": r.ok,
-            "status": r.status_code,
-            "ct": r.headers.get("content-type"),
-            "ce": r.headers.get("content-encoding"),
-            "len_bytes": len(r.content or b""),
-            "final_url": getattr(r, "url", None),
-            "first300": (r.text or "")[:300],
+            "warmup_r1": {"status": r1.status_code, "ct": r1.headers.get("content-type"), "len": len(r1.content or b""), "url": getattr(r1,"url",None), "set_cookie": r1.headers.get("set-cookie")},
+            "warmup_r2": {"status": r2.status_code, "ct": r2.headers.get("content-type"), "len": len(r2.content or b""), "url": getattr(r2,"url",None), "set_cookie": r2.headers.get("set-cookie")},
+            "cookies": HTTP.cookies.get_dict(),
+
+            "post": {"ok": r.ok, "status": r.status_code, "ct": r.headers.get("content-type"), "len": len(r.content or b""), "first300": (r.text or "")[:300], "final_url": getattr(r,"url",None)},
         }), 200
 
     except Exception as e:
