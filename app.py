@@ -1458,12 +1458,11 @@ def _run_vision(sender_id: str, img_url: str, intent_text: str):
         print("_run_vision error:", repr(e))
         send_typing(sender_id, "typing_off")
         send_message(sender_id, "صرا مشكل فـ تحليل الصورة 😅 جرّب صورة أوضح ولا عاود بعد شوية.")
-
 @app.route("/debug-baithek", methods=["GET"])
 def debug_baithek():
     msgs = [{"role": "user", "content": "سلام"}]
     try:
-        baithek_warmup()  # ✅ زيدها هنا
+        baithek_warmup()
 
         r = HTTP.post(
             BAITHEK_API_URL,
@@ -1479,7 +1478,7 @@ def debug_baithek():
             timeout=25
         )
 
- return jsonify({
+        return jsonify({
             "warmup_cookies": len(HTTP.cookies),
             "ok": r.ok,
             "status": r.status_code,
@@ -1492,7 +1491,7 @@ def debug_baithek():
 
     except Exception as e:
         return jsonify({"error": repr(e)}), 500
-        
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
