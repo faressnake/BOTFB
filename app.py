@@ -124,47 +124,54 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
-    # ناخذ آخر 10 رسائل فقط أو أقل لو النص طويل
-    max_chars = 4000  # أقصى طول نصي للـ GET
+    # ناخذ آخر 10 رسائل فقط
     messages = messages[-10:]
     prompt = _messages_to_prompt(messages)
 
-    # لو النص طويل بزاف، ناخذ آخر max_chars حرف
-    if len(prompt) > max_chars:
-        prompt = prompt[-max_chars:]
+    # أقصى طول chunk واحد
+    chunk_size = 1000
+    chunks = [prompt[i:i+chunk_size] for i in range(0, len(prompt), chunk_size)]
+    full_response = []
 
-    for attempt in range(4):
-        try:
-            r = HTTP.get(
-                CLAUDE45_URL,
-                params={"message": prompt},  # كل النص دفعة واحدة
-                timeout=(10, timeout),
-                allow_redirects=True
-            )
-
-            body = (r.text or "").strip()
-            _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
-            _log("CLAUDE45", f"BODY {_short(body, 250)}")
-
-            if r.status_code in (429, 500, 502, 503, 504):
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            r.raise_for_status()
-
+    for chunk in chunks:
+        for attempt in range(4):
             try:
-                js = r.json() or {}
-            except Exception:
+                r = HTTP.get(
+                    CLAUDE45_URL,
+                    params={"message": chunk},
+                    timeout=(10, timeout),
+                    allow_redirects=True
+                )
+
+                body = (r.text or "").strip()
+                _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
+                _log("CLAUDE45", f"BODY {_short(body, 250)}")
+
+                if r.status_code in (429, 500, 502, 503, 504):
+                    _sleep_backoff(attempt, r.headers.get("retry-after"))
+                    continue
+
+                r.raise_for_status()
+
+                try:
+                    js = r.json() or {}
+                except Exception:
+                    _sleep_backoff(attempt)
+                    continue
+
+                answer = (js.get("response") or js.get("answer") or "").strip()
+                if answer:
+                    full_response.append(answer)
+                    break  # نمر للـ chunk التالي
+                else:
+                    _sleep_backoff(attempt)
+                    continue
+
+            except Exception as e:
+                _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
-                continue
 
-            return (js.get("response") or js.get("answer") or "").strip()
-
-        except Exception as e:
-            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
-            _sleep_backoff(attempt)
-
-    return ""
+    return "\n".join(full_response).strip()
 
 # ---------------------------
 # ✅ 58 ولاية
