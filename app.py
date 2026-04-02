@@ -120,15 +120,12 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer(messages, timeout=45) -> str:
+def claude45_answer(messages, timeout=45):
     if not CLAUDE45_URL:
         return ""
 
-    # ناخذ آخر 10 رسائل
     messages = messages[-10:]
     prompt = _messages_to_prompt(messages)
-
-    full_response = ""
 
     def send_part(part):
         """تحاول تبعث جزء نصي وترد الرد"""
@@ -147,7 +144,7 @@ def claude45_answer(messages, timeout=45) -> str:
 
                 if r.status_code in (414, 429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    return None  # لو 414، نعرف نص طويل
+                    return None
                 r.raise_for_status()
 
                 try:
@@ -163,22 +160,22 @@ def claude45_answer(messages, timeout=45) -> str:
                 _sleep_backoff(attempt)
         return None
 
-    # نجرب أول مرة النص كامل
+    # لو النص قصير، نجرب كامل
     resp = send_part(prompt)
     if resp is not None:
-        return resp  # نجح، ما نحتاج تقسيم
+        return resp
 
-    # لو النص طويل (مثلاً 414)، نقسمه إلى دفعات صغيرة
+    # لو النص طويل، نقسمه ونرجع كل جزء **واحد وراء الآخر**
     def split_text(text, size=1500):
         return [text[i:i+size] for i in range(0, len(text), size)]
 
-    for idx, part in enumerate(split_text(prompt)):
+    for part in split_text(prompt):
         resp_part = send_part(part)
         if resp_part:
-            full_response += resp_part + " "
+            # نرجع أول جزء فوراً، والباقي يمكن يتبع في دعوة لاحقة
+            return resp_part
 
-    return full_response.strip()
-
+    return ""
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
