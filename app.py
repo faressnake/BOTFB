@@ -124,11 +124,10 @@ def claude45_answer(messages, timeout=45):
     if not CLAUDE45_URL:
         return []
 
-    # ناخذ آخر 10 رسائل
-    messages = messages[-10:]
+    messages = messages[-10:]  # آخر 10 رسائل فقط
 
     def send_part(part):
-        """تحاول تبعث جزء نصي وترد الرد"""
+        """ترسل جزء من النص وتحصل على الرد"""
         for attempt in range(4):
             try:
                 r = HTTP.get(
@@ -139,7 +138,7 @@ def claude45_answer(messages, timeout=45):
                 )
                 if r.status_code in (414, 429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    return None  # لو النص طويل، نعرف نعاود نقسمو
+                    return None
                 r.raise_for_status()
                 try:
                     js = r.json() or {}
@@ -159,22 +158,22 @@ def claude45_answer(messages, timeout=45):
     all_responses = []
 
     for msg in messages:
-        prompt = _messages_to_prompt([msg])  # نص الرسالة وحدها
+        prompt = _messages_to_prompt([msg])
 
-        # نجرب إرسالها كاملة
-        resp = send_part(prompt)
-        if resp is not None:
-            all_responses.append(resp)
-            continue
+        # نجهز قائمة لكل جزء من السؤال الطويل
+        parts = split_text(prompt)
+        question_response = []
 
-        # لو رجع None (414 أو خطأ)، نقسم النص على دفعات
-        full_resp = ""
-        for part in split_text(prompt):
+        for part in parts:
             resp_part = send_part(part)
             if resp_part:
-                full_resp += resp_part + " "
-        if full_resp:
-            all_responses.append(full_resp.strip())
+                question_response.append(resp_part)
+
+        # كل سؤال يحصل على جوابه الخاص، حتى لو كان طويل
+        if question_response:
+            all_responses.append(" ".join(question_response))
+        else:
+            all_responses.append("⚠️ ما قدرش يجيب الرد")
 
     return all_responses
 # ---------------------------
