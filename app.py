@@ -127,53 +127,51 @@ def claude45_answer(messages, timeout=45) -> str:
     import urllib.parse
 
     max_chars = 4000
-    messages = messages[-10:]
+    messages = messages[-10:]  # آخر 10 رسائل
     prompt = _messages_to_prompt(messages)
+    
+    # قص بأمان على 4000 حرف
     if len(prompt) > max_chars:
         prompt = prompt[-max_chars:]
+        # optional: حاول تقطع على نهاية جملة لو تحب
+        last_dot = prompt.rfind('.')
+        if last_dot > 100:  # لو تلقى نقطة بعد 100 حرف
+            prompt = prompt[last_dot+1:]
 
-    # تقطيع النصوص الطويلة
-    chunk_size = 2000
+    # تقسيم chunk صغير لتفادي 414
+    chunk_size = 1000
     chunks = [prompt[i:i+chunk_size] for i in range(0, len(prompt), chunk_size)]
     full_response = []
 
     for chunk in chunks:
+        encoded = urllib.parse.quote(chunk)
         for attempt in range(4):
             try:
-                # POST دايماً الخيار الأول
-                r = HTTP.post(
-                    CLAUDE45_URL,
-                    data={"message": chunk},
-                    timeout=(10, timeout)
-                )
-                _log("CLAUDE45", f"POST {r.status_code} len={len(r.content or b'')}")
+                url = f"{CLAUDE45_URL}?message={encoded}"
+                r = HTTP.get(url, timeout=(10, timeout))
+                
+                # log مبسط
+                print(f"CLAUDE45 GET {r.status_code} len={len(r.content or b'')}")
+                
                 r.raise_for_status()
-
                 try:
-                    js = r.json() or {}
+                    js = r.json() if 'application/json' in r.headers.get('Content-Type', '') else {}
                     answer = (js.get("response") or js.get("answer") or "").strip()
-                    full_response.append(answer)
-                    break  # خرج من retry لو نجح
-                except Exception:
-                    _sleep_backoff(attempt)
+                    if answer:
+                        full_response.append(answer)
+                        break  # خرج من retry لو نجح
+                    else:
+                        # لو ما جاءش جواب، retry
+                        time.sleep(1.5 * (attempt+1))
+                        continue
+                except Exception as e_json:
+                    print(f"JSON ERROR: {repr(e_json)}")
+                    time.sleep(1.5 * (attempt+1))
                     continue
 
-            except Exception as post_err:
-                # GET fallback فقط للقطع الصغيرة
-                if len(chunk) < 1000:
-                    try:
-                        encoded = urllib.parse.quote(chunk)
-                        r = HTTP.get(f"{CLAUDE45_URL}?message={encoded}", timeout=(10, timeout))
-                        _log("CLAUDE45", f"GET fallback {r.status_code} len={len(r.content or b'')}")
-                        r.raise_for_status()
-                        js = r.json() or {}
-                        full_response.append((js.get("response") or js.get("answer") or "").strip())
-                        break
-                    except Exception as get_err:
-                        _log("CLAUDE45", f"GET fallback ERROR {repr(get_err)}")
-
-                _log("CLAUDE45", f"TRY {attempt+1}/4 POST ERROR {repr(post_err)}")
-                _sleep_backoff(attempt)
+            except Exception as e:
+                print(f"TRY {attempt+1}/4 GET ERROR: {repr(e)}")
+                time.sleep(1.5 * (attempt+1))
 
     return "\n".join(full_response).strip()
 
