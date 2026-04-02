@@ -502,7 +502,7 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "",
         messages += mem_get(user_id)
     messages.append({"role": "user", "content": prompt})
 
-    raw = claude45_answer(messages, timeout=60)
+    raw = claude45_answer_preserve(messages, timeout=60)
     ans = clean_reply(raw)
 
     if user_id and ans:
@@ -1021,7 +1021,7 @@ def get_ai_response(user_id, message_text):
     messages += history
     messages.append({"role": "user", "content": user_q})
 
-    raw = claude45_answer(messages, timeout=45)
+    raw = claude45_answer_preserve(messages, timeout=45)
     ans = clean_reply(raw)
 
     if not ans:
