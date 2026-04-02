@@ -128,15 +128,15 @@ def claude45_answer(messages, timeout=45) -> str:
 
     for attempt in range(4):
         try:
-            r = HTTP.post(
+            r = HTTP.get(
                 CLAUDE45_URL,
-                data={"message": prompt},
+                params={"message": prompt},  # ✅ هنا التعديل
                 timeout=(10, timeout),
                 allow_redirects=True
             )
 
             body = (r.text or "").strip()
-            _log("CLAUDE45", f"POST {r.status_code} ct={(r.headers.get('content-type') or '')} len={len(r.content or b'')}")
+            _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
             _log("CLAUDE45", f"BODY {_short(body, 250)}")
 
             if r.status_code in (429, 500, 502, 503, 504):
@@ -151,10 +151,7 @@ def claude45_answer(messages, timeout=45) -> str:
                 _sleep_backoff(attempt)
                 continue
 
-            if js.get("success") is True:
-                return (js.get("response") or "").strip()
-
-            return (js.get("response") or js.get("answer") or js.get("message") or "").strip()
+            return (js.get("response") or js.get("answer") or "").strip()
 
         except Exception as e:
             _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
