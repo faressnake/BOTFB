@@ -120,56 +120,32 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer_preserve(messages, timeout=45, max_chars=1000) -> str:
+def claude45_answer(messages, timeout=60) -> str:
     """
-    يستعمل كل history للمستخدم ويحافظ على أسلوبه.
+    الرد كما كان في النسخة القديمة، مباشرة بدون تقسيم ولا حفظ أسلوب المستخدم.
     """
     if not CLAUDE45_URL:
         return ""
 
-    # نجهز البرومبت كامل من كل الرسائل
     prompt = _messages_to_prompt(messages)
 
-    # تقسيم البرومبت لتجنب مشاكل الطول
-    chunks = [prompt[i:i+max_chars] for i in range(0, len(prompt), max_chars)]
-    results = []
-
-    for idx, chunk in enumerate(chunks):
-        for attempt in range(4):
-            try:
-                r = HTTP.get(
-                    CLAUDE45_URL,
-                    params={"message": chunk},
-                    timeout=(10, timeout),
-                    allow_redirects=True
-                )
-
-                body = (r.text or "").strip()
-                _log("CLAUDE45", f"Chunk {idx+1}/{len(chunks)} Status={r.status_code} Len={len(r.content or b'')}")
-                _log("CLAUDE45", f"Body {_short(body, 250)}")
-
-                if r.status_code in (429, 500, 502, 503, 504):
-                    _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    continue
-
-                r.raise_for_status()
-                try:
-                    js = r.json() or {}
-                except Exception:
-                    _sleep_backoff(attempt)
-                    continue
-
-                answer = (js.get("response") or js.get("answer") or "").strip()
-                if answer:
-                    results.append(answer)
-                break
-
-            except Exception as e:
-                _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
-                _sleep_backoff(attempt)
-
-    # ندمج كل الردود بنفس الأسلوب والترتيب
-    return "\n\n".join(results)
+    try:
+        r = HTTP.get(
+            CLAUDE45_URL,
+            params={"message": prompt},
+            timeout=(10, timeout),
+            allow_redirects=True
+        )
+        r.raise_for_status()
+        try:
+            js = r.json() or {}
+        except:
+            return ""
+        answer = (js.get("response") or js.get("answer") or "").strip()
+        return answer
+    except Exception as e:
+        _log("CLAUDE45", f"ERROR {repr(e)}")
+        return ""
 
 # ---------------------------
 # ✅ 58 ولاية
@@ -502,7 +478,7 @@ def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "",
         messages += mem_get(user_id)
     messages.append({"role": "user", "content": prompt})
 
-    raw = claude45_answer_preserve(messages, timeout=60)
+    raw = claude45_answer(messages, timeout=60)
     ans = clean_reply(raw)
 
     if user_id and ans:
@@ -1021,7 +997,7 @@ def get_ai_response(user_id, message_text):
     messages += history
     messages.append({"role": "user", "content": user_q})
 
-    raw = claude45_answer_preserve(messages, timeout=45)
+    raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
 
     if not ans:
