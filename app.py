@@ -124,56 +124,47 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
-    import urllib.parse
-
-    max_chars = 4000
-    messages = messages[-10:]  # آخر 10 رسائل
+    # ناخذ آخر 10 رسائل فقط أو أقل لو النص طويل
+    max_chars = 4000  # أقصى طول نصي للـ GET
+    messages = messages[-10:]
     prompt = _messages_to_prompt(messages)
-    
-    # قص بأمان على 4000 حرف
+
+    # لو النص طويل بزاف، ناخذ آخر max_chars حرف
     if len(prompt) > max_chars:
         prompt = prompt[-max_chars:]
-        # optional: حاول تقطع على نهاية جملة لو تحب
-        last_dot = prompt.rfind('.')
-        if last_dot > 100:  # لو تلقى نقطة بعد 100 حرف
-            prompt = prompt[last_dot+1:]
 
-    # تقسيم chunk صغير لتفادي 414
-    chunk_size = 1000
-    chunks = [prompt[i:i+chunk_size] for i in range(0, len(prompt), chunk_size)]
-    full_response = []
+    for attempt in range(4):
+        try:
+            r = HTTP.get(
+                CLAUDE45_URL,
+                params={"message": prompt},  # كل النص دفعة واحدة
+                timeout=(10, timeout),
+                allow_redirects=True
+            )
 
-    for chunk in chunks:
-        encoded = urllib.parse.quote(chunk)
-        for attempt in range(4):
+            body = (r.text or "").strip()
+            _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
+            _log("CLAUDE45", f"BODY {_short(body, 250)}")
+
+            if r.status_code in (429, 500, 502, 503, 504):
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
+
+            r.raise_for_status()
+
             try:
-                url = f"{CLAUDE45_URL}?message={encoded}"
-                r = HTTP.get(url, timeout=(10, timeout))
-                
-                # log مبسط
-                print(f"CLAUDE45 GET {r.status_code} len={len(r.content or b'')}")
-                
-                r.raise_for_status()
-                try:
-                    js = r.json() if 'application/json' in r.headers.get('Content-Type', '') else {}
-                    answer = (js.get("response") or js.get("answer") or "").strip()
-                    if answer:
-                        full_response.append(answer)
-                        break  # خرج من retry لو نجح
-                    else:
-                        # لو ما جاءش جواب، retry
-                        time.sleep(1.5 * (attempt+1))
-                        continue
-                except Exception as e_json:
-                    print(f"JSON ERROR: {repr(e_json)}")
-                    time.sleep(1.5 * (attempt+1))
-                    continue
+                js = r.json() or {}
+            except Exception:
+                _sleep_backoff(attempt)
+                continue
 
-            except Exception as e:
-                print(f"TRY {attempt+1}/4 GET ERROR: {repr(e)}")
-                time.sleep(1.5 * (attempt+1))
+            return (js.get("response") or js.get("answer") or "").strip()
 
-    return "\n".join(full_response).strip()
+        except Exception as e:
+            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
+            _sleep_backoff(attempt)
+
+    return ""
 
 # ---------------------------
 # ✅ 58 ولاية
