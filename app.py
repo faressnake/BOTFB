@@ -120,33 +120,44 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer(messages, timeout=60) -> str:
-    """
-    الرد كما في النسخة القديمة، لكن مع POST لتجنب خطأ 414
-    """
+def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
     prompt = _messages_to_prompt(messages)
 
-    try:
-        # POST بدل GET
-        r = HTTP.post(
-            CLAUDE45_URL,
-            data={"message": prompt},  # هنا نرسل البيانات في body
-            timeout=(10, timeout),
-            allow_redirects=True
-        )
-        r.raise_for_status()
+    for attempt in range(4):
         try:
-            js = r.json() or {}
-        except:
-            return ""
-        answer = (js.get("response") or js.get("answer") or "").strip()
-        return answer
-    except Exception as e:
-        _log("CLAUDE45", f"ERROR {repr(e)}")
-        return ""
+            r = HTTP.get(
+                CLAUDE45_URL,
+                params={"message": prompt},  # ✅ هنا التعديل
+                timeout=(10, timeout),
+                allow_redirects=True
+            )
+
+            body = (r.text or "").strip()
+            _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
+            _log("CLAUDE45", f"BODY {_short(body, 250)}")
+
+            if r.status_code in (429, 500, 502, 503, 504):
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
+
+            r.raise_for_status()
+
+            try:
+                js = r.json() or {}
+            except Exception:
+                _sleep_backoff(attempt)
+                continue
+
+            return (js.get("response") or js.get("answer") or "").strip()
+
+        except Exception as e:
+            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
+            _sleep_backoff(attempt)
+
+    return ""
 
 # ---------------------------
 # ✅ 58 ولاية
