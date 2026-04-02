@@ -133,10 +133,10 @@ def claude45_answer(messages, timeout=45) -> str:
 
     for attempt in range(4):
         try:
-            # ✅ هنا التعديل المهم (POST + params)
+            # ✅ تعديل مهم: POST مع data بدل params
             r = HTTP.post(
                 CLAUDE45_URL,
-                params={"message": prompt},  # 👈 كيما ?message=
+                data={"message": prompt},  # 👈 هنا نبعث النص في body مش URL
                 timeout=(10, timeout),
                 allow_redirects=True
             )
