@@ -1023,9 +1023,7 @@ def get_ai_response(user_id, message_text):
 
     raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
-if user_id and ans:
-    mem_push(user_id, "user", last_user_message)
-    mem_push(user_id, "assistant", ans)
+
     if not ans:
         return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
 
