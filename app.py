@@ -136,9 +136,11 @@ def claude45_answer(messages, timeout=45):
                     timeout=(10, timeout),
                     allow_redirects=True
                 )
-                if r.status_code in (414, 429, 500, 502, 503, 504):
+                if r.status_code in (429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    return None
+                    continue  # نجرب مرة ثانية
+                if r.status_code == 414:
+                    return "TOO_LONG"  # نعلم أن النص طويل بزاف
                 r.raise_for_status()
                 try:
                     js = r.json() or {}
@@ -159,17 +161,20 @@ def claude45_answer(messages, timeout=45):
 
     for msg in messages:
         prompt = _messages_to_prompt([msg])
-
-        # نجهز قائمة لكل جزء من السؤال الطويل
-        parts = split_text(prompt)
         question_response = []
 
-        for part in parts:
-            resp_part = send_part(part)
-            if resp_part:
-                question_response.append(resp_part)
+        # نجرب إرسال النص كامل أولاً
+        resp = send_part(prompt)
+        if resp == "TOO_LONG":
+            # إذا النص طويل، نقسمه على أجزاء
+            for part in split_text(prompt):
+                part_resp = send_part(part)
+                if part_resp and part_resp != "TOO_LONG":
+                    question_response.append(part_resp)
+        elif resp:
+            question_response.append(resp)
 
-        # كل سؤال يحصل على جوابه الخاص، حتى لو كان طويل
+        # نحافظ على كل سؤال وجوابه
         if question_response:
             all_responses.append(" ".join(question_response))
         else:
