@@ -124,40 +124,58 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
-    max_chars = 4000
-    messages = messages[-10:]  # ناخذ آخر 10 رسائل
-    prompt = _messages_to_prompt(messages)
+    import urllib.parse
 
-    # تقص النص إذا طول بزاف
+    max_chars = 4000
+    messages = messages[-10:]
+    prompt = _messages_to_prompt(messages)
     if len(prompt) > max_chars:
         prompt = prompt[-max_chars:]
 
-    for attempt in range(4):
-        try:
-            # POST مع body
-            r = HTTP.post(
-                CLAUDE45_URL,
-                data={"message": prompt},  # النص يروح هنا
-                timeout=(10, timeout)
-            )
+    # تقطيع النصوص الطويلة
+    chunk_size = 2000
+    chunks = [prompt[i:i+chunk_size] for i in range(0, len(prompt), chunk_size)]
+    full_response = []
 
-            _log("CLAUDE45", f"POST {r.status_code} len={len(r.content or b'')}")
-            r.raise_for_status()
-
-            # حاول نجيب JSON
+    for chunk in chunks:
+        for attempt in range(4):
             try:
-                js = r.json() or {}
-            except Exception:
+                # POST دايماً الخيار الأول
+                r = HTTP.post(
+                    CLAUDE45_URL,
+                    data={"message": chunk},
+                    timeout=(10, timeout)
+                )
+                _log("CLAUDE45", f"POST {r.status_code} len={len(r.content or b'')}")
+                r.raise_for_status()
+
+                try:
+                    js = r.json() or {}
+                    answer = (js.get("response") or js.get("answer") or "").strip()
+                    full_response.append(answer)
+                    break  # خرج من retry لو نجح
+                except Exception:
+                    _sleep_backoff(attempt)
+                    continue
+
+            except Exception as post_err:
+                # GET fallback فقط للقطع الصغيرة
+                if len(chunk) < 1000:
+                    try:
+                        encoded = urllib.parse.quote(chunk)
+                        r = HTTP.get(f"{CLAUDE45_URL}?message={encoded}", timeout=(10, timeout))
+                        _log("CLAUDE45", f"GET fallback {r.status_code} len={len(r.content or b'')}")
+                        r.raise_for_status()
+                        js = r.json() or {}
+                        full_response.append((js.get("response") or js.get("answer") or "").strip())
+                        break
+                    except Exception as get_err:
+                        _log("CLAUDE45", f"GET fallback ERROR {repr(get_err)}")
+
+                _log("CLAUDE45", f"TRY {attempt+1}/4 POST ERROR {repr(post_err)}")
                 _sleep_backoff(attempt)
-                continue
 
-            return (js.get("response") or js.get("answer") or "").strip()
-
-        except Exception as e:
-            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
-            _sleep_backoff(attempt)
-
-    return ""
+    return "\n".join(full_response).strip()
 
 # ---------------------------
 # ✅ 58 ولاية
