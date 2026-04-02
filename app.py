@@ -121,50 +121,68 @@ def _messages_to_prompt(messages):
     return "\n".join(lines)
 
 def claude45_answer(messages, timeout=45) -> str:
+    """
+    نسخة آمنة من claude45_answer:
+    - تحفظ التاريخ
+    - تنظف الرد
+    - تتجنب 414 URI Too Long
+    """
     if not CLAUDE45_URL:
         return ""
 
-    # ناخذ آخر 10 رسائل فقط أو أقل لو النص طويل
-    max_chars = 4000  # أقصى طول نصي للـ GET
+    # آخر 10 رسائل فقط
     messages = messages[-10:]
-    prompt = _messages_to_prompt(messages)
+    full_prompt = _messages_to_prompt(messages).strip()
 
-    # لو النص طويل بزاف، ناخذ آخر max_chars حرف
-    if len(prompt) > max_chars:
-        prompt = prompt[-max_chars:]
+    # طول chunk آمن قبل الترميز
+    max_chunk_chars = 2000  # أقل من 4000 بعد URL encoding
 
-    for attempt in range(4):
-        try:
-            r = HTTP.get(
-                CLAUDE45_URL,
-                params={"message": prompt},  # كل النص دفعة واحدة
-                timeout=(10, timeout),
-                allow_redirects=True
-            )
+    # تقسيم النص إذا طويل
+    chunks = []
+    while full_prompt:
+        part = full_prompt[:max_chunk_chars]
+        full_prompt = full_prompt[max_chunk_chars:]
+        chunks.append(part)
 
-            body = (r.text or "").strip()
-            _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
-            _log("CLAUDE45", f"BODY {_short(body, 250)}")
-
-            if r.status_code in (429, 500, 502, 503, 504):
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
-            r.raise_for_status()
-
+    final_answer = ""
+    for chunk in chunks:
+        chunk_encoded = chunk  # requests سيقوم بالترميز تلقائي
+        for attempt in range(4):
             try:
-                js = r.json() or {}
-            except Exception:
+                r = HTTP.get(
+                    CLAUDE45_URL,
+                    params={"message": chunk_encoded},
+                    timeout=(10, timeout),
+                    allow_redirects=True
+                )
+
+                _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
+                _log("CLAUDE45", f"BODY {_short(r.text, 250)}")
+
+                if r.status_code in (429, 500, 502, 503, 504):
+                    _sleep_backoff(attempt, r.headers.get("retry-after"))
+                    continue
+
+                r.raise_for_status()
+
+                try:
+                    js = r.json() or {}
+                except Exception:
+                    _sleep_backoff(attempt)
+                    continue
+
+                ans = (js.get("response") or js.get("answer") or "").strip()
+                if ans:
+                    final_answer += ans + "\n"
+                break  # نجح chunk، نروح للتالي
+
+            except Exception as e:
+                _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
-                continue
 
-            return (js.get("response") or js.get("answer") or "").strip()
-
-        except Exception as e:
-            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
-            _sleep_backoff(attempt)
-
-    return ""
+    final_answer = final_answer.strip()
+    cleaned = clean_reply(final_answer)
+    return cleaned
 
 
 # ---------------------------
