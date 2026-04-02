@@ -122,7 +122,7 @@ def _messages_to_prompt(messages):
 
 def claude45_answer(messages, timeout=60) -> str:
     """
-    الرد كما كان في النسخة القديمة، مباشرة بدون تقسيم ولا حفظ أسلوب المستخدم.
+    الرد كما في النسخة القديمة، لكن مع POST لتجنب خطأ 414
     """
     if not CLAUDE45_URL:
         return ""
@@ -130,9 +130,10 @@ def claude45_answer(messages, timeout=60) -> str:
     prompt = _messages_to_prompt(messages)
 
     try:
-        r = HTTP.get(
+        # POST بدل GET
+        r = HTTP.post(
             CLAUDE45_URL,
-            params={"message": prompt},
+            data={"message": prompt},  # هنا نرسل البيانات في body
             timeout=(10, timeout),
             allow_redirects=True
         )
