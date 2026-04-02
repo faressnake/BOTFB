@@ -122,10 +122,10 @@ def _messages_to_prompt(messages):
 
 def claude45_answer(messages, timeout=45):
     if not CLAUDE45_URL:
-        return ""
+        return []
 
+    # ناخذ آخر 10 رسائل
     messages = messages[-10:]
-    prompt = _messages_to_prompt(messages)
 
     def send_part(part):
         """تحاول تبعث جزء نصي وترد الرد"""
@@ -137,45 +137,46 @@ def claude45_answer(messages, timeout=45):
                     timeout=(10, timeout),
                     allow_redirects=True
                 )
-
-                body = (r.text or "").strip()
-                _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
-                _log("CLAUDE45", f"BODY {_short(body, 250)}")
-
                 if r.status_code in (414, 429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    return None
+                    return None  # لو النص طويل، نعرف نعاود نقسمو
                 r.raise_for_status()
-
                 try:
                     js = r.json() or {}
                 except Exception:
                     _sleep_backoff(attempt)
                     continue
-
                 return (js.get("response") or js.get("answer") or "").strip()
-
             except Exception as e:
                 _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
         return None
 
-    # لو النص قصير، نجرب كامل
-    resp = send_part(prompt)
-    if resp is not None:
-        return resp
-
-    # لو النص طويل، نقسمه ونرجع كل جزء **واحد وراء الآخر**
     def split_text(text, size=1500):
+        """تقسم النص الطويل على دفعات"""
         return [text[i:i+size] for i in range(0, len(text), size)]
 
-    for part in split_text(prompt):
-        resp_part = send_part(part)
-        if resp_part:
-            # نرجع أول جزء فوراً، والباقي يمكن يتبع في دعوة لاحقة
-            return resp_part
+    all_responses = []
 
-    return ""
+    for msg in messages:
+        prompt = _messages_to_prompt([msg])  # نص الرسالة وحدها
+
+        # نجرب إرسالها كاملة
+        resp = send_part(prompt)
+        if resp is not None:
+            all_responses.append(resp)
+            continue
+
+        # لو رجع None (414 أو خطأ)، نقسم النص على دفعات
+        full_resp = ""
+        for part in split_text(prompt):
+            resp_part = send_part(part)
+            if resp_part:
+                full_resp += resp_part + " "
+        if full_resp:
+            all_responses.append(full_resp.strip())
+
+    return all_responses
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
