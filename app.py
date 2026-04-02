@@ -125,32 +125,26 @@ def claude45_answer(messages, timeout=45) -> str:
         return ""
 
     max_chars = 4000
-    messages = messages[-10:]
+    messages = messages[-10:]  # ناخذ آخر 10 رسائل
     prompt = _messages_to_prompt(messages)
 
+    # تقص النص إذا طول بزاف
     if len(prompt) > max_chars:
         prompt = prompt[-max_chars:]
 
     for attempt in range(4):
         try:
-            # ✅ تعديل مهم: POST مع data بدل params
+            # POST مع body
             r = HTTP.post(
                 CLAUDE45_URL,
-                data={"message": prompt},  # 👈 هنا نبعث النص في body مش URL
-                timeout=(10, timeout),
-                allow_redirects=True
+                data={"message": prompt},  # النص يروح هنا
+                timeout=(10, timeout)
             )
 
-            body = (r.text or "").strip()
             _log("CLAUDE45", f"POST {r.status_code} len={len(r.content or b'')}")
-            _log("CLAUDE45", f"BODY {_short(body, 250)}")
-
-            if r.status_code in (429, 500, 502, 503, 504):
-                _sleep_backoff(attempt, r.headers.get("retry-after"))
-                continue
-
             r.raise_for_status()
 
+            # حاول نجيب JSON
             try:
                 js = r.json() or {}
             except Exception:
@@ -164,7 +158,6 @@ def claude45_answer(messages, timeout=45) -> str:
             _sleep_backoff(attempt)
 
     return ""
-
 
 # ---------------------------
 # ✅ 58 ولاية
