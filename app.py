@@ -120,9 +120,9 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer(messages, timeout=45):
+def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
-        return []
+        return ""
 
     # ناخذ آخر 10 رسائل
     messages = messages[-10:]
@@ -139,7 +139,7 @@ def claude45_answer(messages, timeout=45):
                 )
                 if r.status_code in (414, 429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    return None  # لو النص طويل، نعرف نعاود نقسمو
+                    return None
                 r.raise_for_status()
                 try:
                     js = r.json() or {}
@@ -156,7 +156,7 @@ def claude45_answer(messages, timeout=45):
         """تقسم النص الطويل على دفعات"""
         return [text[i:i+size] for i in range(0, len(text), size)]
 
-    all_responses = []
+    full_response = ""
 
     for msg in messages:
         prompt = _messages_to_prompt([msg])  # نص الرسالة وحدها
@@ -164,19 +164,17 @@ def claude45_answer(messages, timeout=45):
         # نجرب إرسالها كاملة
         resp = send_part(prompt)
         if resp is not None:
-            all_responses.append(resp)
+            full_response += resp + "\n"
             continue
 
         # لو رجع None (414 أو خطأ)، نقسم النص على دفعات
-        full_resp = ""
         for part in split_text(prompt):
             resp_part = send_part(part)
             if resp_part:
-                full_resp += resp_part + " "
-        if full_resp:
-            all_responses.append(full_resp.strip())
+                full_response += resp_part + " "
 
-    return all_responses
+    # نظف المسافات الزائدة ونرجع نص موحد
+    return full_response.strip()
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
