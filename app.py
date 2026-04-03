@@ -152,8 +152,18 @@ def claude45_answer(messages, timeout=45) -> str:
         return None
 
     def split_text(text, size=1500):
-        """تقسم النص الطويل على دفعات"""
-        return [text[i:i+size] for i in range(0, len(text), size)]
+        """تقسم النص الطويل على دفعات بطريقة ذكية"""
+        parts = []
+        start = 0
+        while start < len(text):
+            end = start + size
+            # نحاول نقطع عند آخر نقطة قبل الحجم
+            cut = text.rfind(".", start, end)
+            if cut <= start:
+                cut = end
+            parts.append(text[start:cut].strip())
+            start = cut
+        return parts
 
     full_response = ""
     prompt = _messages_to_prompt([last_msg])  # نص آخر رسالة فقط
@@ -167,7 +177,8 @@ def claude45_answer(messages, timeout=45) -> str:
         for part in split_text(prompt):
             resp_part = send_part(part)
             if resp_part:
-                full_response += resp_part + " "
+                # نضيف سطر فارغ بين الأجزاء لضمان وضوح
+                full_response += resp_part + "\n\n"
 
     return full_response.strip()
 # ---------------------------
