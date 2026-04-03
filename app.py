@@ -125,17 +125,15 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
-    max_total_chars = 4000  # أقصى طول نصي قبل التجزئة
-    max_chunk_chars = 2000  # طول كل قطعة عند التجزئة
+    max_total_chars = 4000
+    max_chunk_chars = 2000
 
     messages = messages[-10:]
     prompt = _messages_to_prompt(messages)
 
-    # لو النص طويل بزاف، ناخذ آخر max_total_chars حرف
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
 
-    # تقسيم النص لقطع أصغر لو طول كبير
     chunks = [prompt[i:i + max_chunk_chars] for i in range(0, len(prompt), max_chunk_chars)]
 
     final_response = []
@@ -154,19 +152,17 @@ def claude45_answer(messages, timeout=45) -> str:
                 _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
                 _log("CLAUDE45", f"BODY {_short(body, 250)}")
 
-                # التعامل مع أخطاء السيرفر المؤقتة
                 if r.status_code in (429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
                     continue
 
-                # لو جا 414 URI Too Long، نقص القطعة ونعاود
                 if r.status_code == 414:
-                    if len(chunk) > 500:  # نقسمها أكثر
+                    if len(chunk) > 500:
                         mid = len(chunk) // 2
                         chunks.insert(idx + 1, chunk[mid:])
                         chunks[idx] = chunk[:mid]
                         _log("CLAUDE45", f"414 TOO LONG, splitting chunk idx={idx}")
-                        break  # نعاود إرسال القطعة الجديدة
+                        break
                     else:
                         _log("CLAUDE45", "414 TOO LONG, chunk أصغر من 500، نتجاوز")
                         break
@@ -188,18 +184,12 @@ def claude45_answer(messages, timeout=45) -> str:
                 _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
 
-# بعد ما تجمع كل القطع
-final_text = "\n".join(final_response)
-
-# نمسح أي ذكر لتوقيع Aria أو مطور
-final_text = re.sub(r"(?i)أنا\s+\*\*Aria\*\*.*", "", final_text)
-final_text = re.sub(r"(?i)مطور\s+من\s+طرف.*", "", final_text)
-
-# ننظف النص النهائي بالدالة اللي عندك
-final_text = clean_reply(final_text)
-
-# نرجع النص النهائي
-return final_text
+    # بعد ما تجمع كل القطع
+    final_text = "\n".join(final_response)
+    final_text = re.sub(r"(?i)أنا\s+\*\*Aria\*\*.*", "", final_text)
+    final_text = re.sub(r"(?i)مطور\s+من\s+طرف.*", "", final_text)
+    final_text = clean_reply(final_text)
+    return final_text
 
 # ---------------------------
 # ✅ 58 ولاية
