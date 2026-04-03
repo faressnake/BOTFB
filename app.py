@@ -124,8 +124,8 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
-    # ناخذ آخر 10 رسائل فقط
-    max_chars = 4000
+    # ناخذ آخر 10 رسائل فقط أو أقل لو النص طويل
+    max_chars = 4000  # أقصى طول نصي للـ GET
     messages = messages[-10:]
     prompt = _messages_to_prompt(messages)
 
@@ -133,14 +133,11 @@ def claude45_answer(messages, timeout=45) -> str:
     if len(prompt) > max_chars:
         prompt = prompt[-max_chars:]
 
-    # نضيف برومبت يحافظ على الأسلوب تاعك
-    payload = f"اتبع النص كما هو تماماً ورد بنفس الأسلوب دون تغيير:\n{prompt}"
-
     for attempt in range(4):
         try:
             r = HTTP.get(
                 CLAUDE45_URL,
-                params={"message": payload},  # كل النص دفعة واحدة
+                params={"message": prompt},  # كل النص دفعة واحدة
                 timeout=(10, timeout),
                 allow_redirects=True
             )
