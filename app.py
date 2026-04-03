@@ -130,10 +130,15 @@ def claude45_answer(messages, timeout=45) -> str:
 
     messages = messages[-10:]
 
-    # ==========================
-    # ✅ ناخذ system + آخر user فقط
+    # ناخذ system + آخر user فقط
     system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
-    last_msg = messages[-1]
+    last_msg = None
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            last_msg = m
+            break
+    if not last_msg:
+        last_msg = messages[-1]
 
     parts = []
     if system_msg:
@@ -141,13 +146,10 @@ def claude45_answer(messages, timeout=45) -> str:
     parts.append(last_msg.get("content", ""))
 
     prompt = "\n\n".join(parts)
-    # ==========================
-
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
 
     chunks = [prompt[i:i + max_chunk_chars] for i in range(0, len(prompt), max_chunk_chars)]
-
     final_response = []
 
     for idx, chunk in enumerate(chunks):
@@ -160,10 +162,6 @@ def claude45_answer(messages, timeout=45) -> str:
                     allow_redirects=True
                 )
 
-                body = (r.text or "").strip()
-                _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
-                _log("CLAUDE45", f"BODY {_short(body, 250)}")
-
                 if r.status_code in (429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
                     continue
@@ -173,32 +171,20 @@ def claude45_answer(messages, timeout=45) -> str:
                         mid = len(chunk) // 2
                         chunks.insert(idx + 1, chunk[mid:])
                         chunks[idx] = chunk[:mid]
-                        _log("CLAUDE45", f"414 TOO LONG, splitting chunk idx={idx}")
                         break
                     else:
-                        _log("CLAUDE45", "414 TOO LONG, chunk أصغر من 500، نتجاوز")
                         break
 
                 r.raise_for_status()
-
-                try:
-                    js = r.json() or {}
-                except Exception:
-                    _sleep_backoff(attempt)
-                    continue
-
+                js = r.json() or {}
                 answer = (js.get("response") or js.get("answer") or "").strip()
                 if answer:
                     final_response.append(answer)
                 break
-
             except Exception as e:
-                _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
 
     final_text = "\n".join(final_response)
-    final_text = re.sub(r"(?i)أنا\s+\*\*Aria\*\*.*", "", final_text)
-    final_text = re.sub(r"(?i)مطور\s+من\s+طرف.*", "", final_text)
     final_text = clean_reply(final_text)
     return final_text
 
