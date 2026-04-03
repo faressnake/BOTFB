@@ -121,7 +121,11 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer(messages, timeout=45) -> str:
+def claude45_answer(uid, messages, timeout=45) -> str:
+    """
+    uid: معرف المستخدم باش نحتافظ بذاكرة صغيرة لكل مستخدم
+    messages: قائمة الرسائل الحالية
+    """
     if not CLAUDE45_URL:
         return ""
 
@@ -140,14 +144,36 @@ def claude45_answer(messages, timeout=45) -> str:
     if not last_msg:
         last_msg = messages[-1]
 
+    # ==========================
+    # نحضر prompt مع الذاكرة السابقة
     parts = []
+
     if system_msg:
         parts.append(system_msg.get("content", ""))
-    parts.append(last_msg.get("content", ""))
+
+    # 🔹 إضافة الرسائل المحفوظة في الذاكرة
+    memory_msgs = mem_get(uid)  # ترجع [{"role": ..., "content": ...}, ...]
+    for mem in memory_msgs:
+        role = mem.get("role")
+        content = mem.get("content", "")
+        if role == "user":
+            parts.append(f"[USER] {content}")
+        else:
+            parts.append(f"[ASSISTANT] {content}")
+
+    # الرسالة الأخيرة الحالية
+    parts.append(f"[USER] {last_msg.get('content', '')}")
+
+    # إجبار Claude45 على اتباع الأسلوب القديم
+    parts.append(
+        "✅ رد فقط بأسلوب Botivity القديم، لا تذكر AI، لا تذكر نموذج لغوي، "
+        "لا تذكر Aria أو أي توقيع ثاني. اتبع البرومبت كما هو."
+    )
 
     prompt = "\n\n".join(parts)
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
+    # ==========================
 
     chunks = [prompt[i:i + max_chunk_chars] for i in range(0, len(prompt), max_chunk_chars)]
     final_response = []
@@ -186,6 +212,10 @@ def claude45_answer(messages, timeout=45) -> str:
 
     final_text = "\n".join(final_response)
     final_text = clean_reply(final_text)
+
+    # 🔹 تخزين الرد في الذاكرة باش يتذكر المستخدم لاحقا
+    mem_push(uid, "assistant", final_text)
+
     return final_text
 
 # ---------------------------
