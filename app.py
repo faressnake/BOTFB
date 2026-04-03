@@ -121,61 +121,53 @@ def _messages_to_prompt(messages):
     return "\n".join(lines)
 
 def claude45_answer(messages, timeout=45) -> str:
-    if not CLAUDE45_URL or not messages:
+    if not CLAUDE45_URL:
         return ""
 
-    # ناخذ آخر رسالة وحدة فقط (كل سؤال يرد عليه وحده)
-    last_msg = messages[-1]
-    prompt = last_msg.get("content") if isinstance(last_msg, dict) else str(last_msg)
+    # ناخذ آخر 10 رسائل فقط
+    max_chars = 4000
+    messages = messages[-10:]
+    prompt = _messages_to_prompt(messages)
+
+    # لو النص طويل بزاف، ناخذ آخر max_chars حرف
+    if len(prompt) > max_chars:
+        prompt = prompt[-max_chars:]
 
     # نضيف برومبت يحافظ على الأسلوب تاعك
     payload = f"اتبع النص كما هو تماماً ورد بنفس الأسلوب دون تغيير:\n{prompt}"
 
-    def send_text(text):
-        """تحاول تبعث النص، لو رجع 414 تقسمه"""
-        max_part = 1500  # طول كل جزء عند تقسيم النص
-        parts = [text]  # نفترض نص كامل أولًا
+    for attempt in range(4):
+        try:
+            r = HTTP.get(
+                CLAUDE45_URL,
+                params={"message": payload},  # كل النص دفعة واحدة
+                timeout=(10, timeout),
+                allow_redirects=True
+            )
 
-        for attempt in range(4):
-            for part in parts:
-                try:
-                    r = HTTP.get(
-                        CLAUDE45_URL,
-                        params={"message": part},
-                        timeout=(10, timeout),
-                        allow_redirects=True
-                    )
-                    if r.status_code in (414, 429, 500, 502, 503, 504):
-                        if r.status_code == 414:
-                            # قسم النص على دفعات أصغر
-                            new_parts = []
-                            start = 0
-                            while start < len(part):
-                                end = start + max_part
-                                cut = part.rfind(".", start, end)
-                                if cut <= start:
-                                    cut = end
-                                new_parts.append(part[start:cut].strip())
-                                start = cut
-                            parts = new_parts
-                            break  # نعيد التجربة مع الأجزاء الجديدة
-                        else:
-                            _sleep_backoff(attempt, r.headers.get("retry-after"))
-                            continue
-                    r.raise_for_status()
-                    try:
-                        js = r.json() or {}
-                    except Exception:
-                        _sleep_backoff(attempt)
-                        continue
-                    return (js.get("response") or js.get("answer") or "").strip()
-                except Exception as e:
-                    _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
-                    _sleep_backoff(attempt)
-        return None
+            body = (r.text or "").strip()
+            _log("CLAUDE45", f"GET {r.status_code} len={len(r.content or b'')}")
+            _log("CLAUDE45", f"BODY {_short(body, 250)}")
 
-    response = send_text(payload)
-    return response or ""
+            if r.status_code in (429, 500, 502, 503, 504):
+                _sleep_backoff(attempt, r.headers.get("retry-after"))
+                continue
+
+            r.raise_for_status()
+
+            try:
+                js = r.json() or {}
+            except Exception:
+                _sleep_backoff(attempt)
+                continue
+
+            return (js.get("response") or js.get("answer") or "").strip()
+
+        except Exception as e:
+            _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
+            _sleep_backoff(attempt)
+
+    return ""
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
