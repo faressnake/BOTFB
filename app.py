@@ -121,11 +121,10 @@ def _messages_to_prompt(messages):
     return "\n".join(lines)
 
 def claude45_answer(messages, timeout=45) -> str:
-    if not CLAUDE45_URL:
+    if not CLAUDE45_URL or not messages:
         return ""
 
-    # ناخذ آخر 10 رسائل
-    messages = messages[-10:]
+    last_msg = messages[-1]  # ناخذ آخر رسالة وحدة فقط
 
     def send_part(part):
         """تحاول تبعث جزء نصي وترد الرد"""
@@ -157,23 +156,19 @@ def claude45_answer(messages, timeout=45) -> str:
         return [text[i:i+size] for i in range(0, len(text), size)]
 
     full_response = ""
+    prompt = _messages_to_prompt([last_msg])  # نص آخر رسالة فقط
 
-    for msg in messages:
-        prompt = _messages_to_prompt([msg])  # نص الرسالة وحدها
-
-        # نجرب إرسالها كاملة
-        resp = send_part(prompt)
-        if resp is not None:
-            full_response += resp + "\n"
-            continue
-
+    # نجرب إرسالها كاملة
+    resp = send_part(prompt)
+    if resp is not None:
+        full_response += resp
+    else:
         # لو رجع None (414 أو خطأ)، نقسم النص على دفعات
         for part in split_text(prompt):
             resp_part = send_part(part)
             if resp_part:
                 full_response += resp_part + " "
 
-    # نظف المسافات الزائدة ونرجع نص موحد
     return full_response.strip()
 # ---------------------------
 # ✅ 58 ولاية
