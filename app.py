@@ -188,7 +188,19 @@ def claude45_answer(messages, timeout=45) -> str:
                 _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
 
-    return "\n".join(final_response)
+# بعد ما تجمع كل القطع
+final_text = "\n".join(final_response)
+
+# نمسح أي ذكر لتوقيع Aria أو مطور
+final_text = re.sub(r"(?i)أنا\s+\*\*Aria\*\*.*", "", final_text)
+final_text = re.sub(r"(?i)مطور\s+من\s+طرف.*", "", final_text)
+
+# ننظف النص النهائي بالدالة اللي عندك
+final_text = clean_reply(final_text)
+
+# نرجع النص النهائي
+return final_text
+
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
