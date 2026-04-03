@@ -460,8 +460,8 @@ def clean_reply(text: str) -> str:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
     # ✅ نحافظ على "مطور من طرف فارس 🇩🇿"
-    if "مطور من طرف" not in cleaned:
-        cleaned += "\nمطور من طرف فارس 🇩🇿"
+   # if "مطور من طرف" not in cleaned:
+     #   cleaned += "\nمطور من طرف فارس 🇩🇿"
 
     # تنظيف الفضاءات الزائدة والأسطر الفارغة
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
