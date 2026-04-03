@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import re
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -431,7 +432,7 @@ def setup():
 # ---------------------------
 def clean_reply(text: str) -> str:
     if not text:
-        return ""
+        return "أنا Botivity 😊\nمطور من طرف فارس 🇩🇿"
 
     forbidden = [
         r"\bgpt[-\s]?\d*\b",
@@ -454,23 +455,19 @@ def clean_reply(text: str) -> str:
 
     cleaned = text
 
-    # ❌ نحذف الكلمات الممنوعة
+    # ❌ نحذف الكلمات الممنوعة بس بدون المساس بالأسطر أو الإيموجيات
     for pattern in forbidden:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
-    # ✅ نصلح "مطور من طرف" إذا جات ناقصة
-    cleaned = re.sub(
-        r"مطور\s*من\s*طرف\s*\.*",
-        "مطور من طرف فارس 🇩🇿",
-        cleaned
-    )
+    # ✅ نحافظ على "مطور من طرف فارس 🇩🇿"
+    if "مطور من طرف" not in cleaned:
+        cleaned += "\nمطور من طرف فارس 🇩🇿"
 
-    # تنظيف تنسيق
-    cleaned = re.sub(r"^#{1,6}\s*", "", cleaned, flags=re.MULTILINE)
+    # تنظيف الفضاءات الزائدة والأسطر الفارغة
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
-    # إذا الرد فارغ بزاف
+    # لو الرد صغيور بزاف، نرجع الرد الافتراضي
     if not cleaned or len(cleaned) < 5:
         return "أنا Botivity 😊\nمطور من طرف فارس 🇩🇿"
 
