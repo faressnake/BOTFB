@@ -466,6 +466,9 @@ def clean_reply(text: str) -> str:
     # تنظيف الفضاءات الزائدة والأسطر الفارغة
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    # نمسح أي ذكر لـ Aria أو توقيع ثاني
+    cleaned = re.sub(r"أنا\s+\*\*Aria\*\*.*", "", cleaned)
+    cleaned = re.sub(r"مطور\s+من\s+طرف.*", "", cleaned)
 
     # لو الرد صغيور بزاف، نرجع الرد الافتراضي
     if not cleaned or len(cleaned) < 5:
