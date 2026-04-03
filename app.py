@@ -129,7 +129,19 @@ def claude45_answer(messages, timeout=45) -> str:
     max_chunk_chars = 2000
 
     messages = messages[-10:]
-    prompt = _messages_to_prompt(messages)
+
+    # ==========================
+    # ✅ ناخذ system + آخر user فقط
+    system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
+    last_msg = messages[-1]
+
+    parts = []
+    if system_msg:
+        parts.append(system_msg.get("content", ""))
+    parts.append(last_msg.get("content", ""))
+
+    prompt = "\n\n".join(parts)
+    # ==========================
 
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
@@ -184,7 +196,6 @@ def claude45_answer(messages, timeout=45) -> str:
                 _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
 
-    # بعد ما تجمع كل القطع
     final_text = "\n".join(final_response)
     final_text = re.sub(r"(?i)أنا\s+\*\*Aria\*\*.*", "", final_text)
     final_text = re.sub(r"(?i)مطور\s+من\s+طرف.*", "", final_text)
