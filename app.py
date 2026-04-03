@@ -124,63 +124,58 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL or not messages:
         return ""
 
-    last_msg = messages[-1]  # آخر رسالة وحدة فقط
-
-    def send_part(part):
-        """تحاول تبعث جزء نصي وترد الرد"""
-        # نضيف برومبت واضح يحفظ الأسلوب
-        payload = f"اتبع النص كما هو تماماً ورد بنفس الأسلوب دون تغيير:\n{part}"
-        for attempt in range(4):
-            try:
-                r = HTTP.get(
-                    CLAUDE45_URL,
-                    params={"message": payload},
-                    timeout=(10, timeout),
-                    allow_redirects=True
-                )
-                if r.status_code in (414, 429, 500, 502, 503, 504):
-                    _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    return None
-                r.raise_for_status()
-                try:
-                    js = r.json() or {}
-                except Exception:
-                    _sleep_backoff(attempt)
-                    continue
-                return (js.get("response") or js.get("answer") or "").strip()
-            except Exception as e:
-                _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
-                _sleep_backoff(attempt)
-        return None
-
-    def split_text(text, size=1500):
-        """تقسم النص الطويل على دفعات"""
-        parts = []
-        start = 0
-        while start < len(text):
-            end = start + size
-            cut = text.rfind(".", start, end)
-            if cut <= start:
-                cut = end
-            parts.append(text[start:cut].strip())
-            start = cut
-        return parts
-
-    full_response = ""
+    # ناخذ آخر رسالة وحدة فقط (كل سؤال يرد عليه وحده)
+    last_msg = messages[-1]
     prompt = last_msg.get("content") if isinstance(last_msg, dict) else str(last_msg)
 
-    # نجرب إرسالها كاملة
-    resp = send_part(prompt)
-    if resp is not None:
-        full_response += resp
-    else:
-        # لو رجع None (414 أو خطأ)، نقسم النص على دفعات
-        for part in split_text(prompt):
-            resp_part = send_part(part)
-            if resp_part:
-                full_response += resp_part + "\n\n"
+    # نضيف برومبت يحافظ على الأسلوب تاعك
+    payload = f"اتبع النص كما هو تماماً ورد بنفس الأسلوب دون تغيير:\n{prompt}"
 
-    return full_response.strip()
+    def send_text(text):
+        """تحاول تبعث النص، لو رجع 414 تقسمه"""
+        max_part = 1500  # طول كل جزء عند تقسيم النص
+        parts = [text]  # نفترض نص كامل أولًا
+
+        for attempt in range(4):
+            for part in parts:
+                try:
+                    r = HTTP.get(
+                        CLAUDE45_URL,
+                        params={"message": part},
+                        timeout=(10, timeout),
+                        allow_redirects=True
+                    )
+                    if r.status_code in (414, 429, 500, 502, 503, 504):
+                        if r.status_code == 414:
+                            # قسم النص على دفعات أصغر
+                            new_parts = []
+                            start = 0
+                            while start < len(part):
+                                end = start + max_part
+                                cut = part.rfind(".", start, end)
+                                if cut <= start:
+                                    cut = end
+                                new_parts.append(part[start:cut].strip())
+                                start = cut
+                            parts = new_parts
+                            break  # نعيد التجربة مع الأجزاء الجديدة
+                        else:
+                            _sleep_backoff(attempt, r.headers.get("retry-after"))
+                            continue
+                    r.raise_for_status()
+                    try:
+                        js = r.json() or {}
+                    except Exception:
+                        _sleep_backoff(attempt)
+                        continue
+                    return (js.get("response") or js.get("answer") or "").strip()
+                except Exception as e:
+                    _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
+                    _sleep_backoff(attempt)
+        return None
+
+    response = send_text(payload)
+    return response or ""
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
