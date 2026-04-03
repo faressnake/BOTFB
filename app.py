@@ -120,11 +120,16 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer(messages, timeout=45):
+def claude45_answer(messages, timeout=45) -> list:
+    """
+    ترجع قائمة بالردود لكل رسالة مستقلة.
+    لو النص طويل، يقسمه على دفعات تلقائيًا.
+    """
     if not CLAUDE45_URL:
         return []
 
-    messages = messages[-10:]  # آخر 10 رسائل فقط
+    # ناخذ آخر 10 رسائل فقط
+    messages = messages[-10:]
 
     def send_part(part):
         """ترسل جزء من النص وتحصل على الرد"""
@@ -136,21 +141,27 @@ def claude45_answer(messages, timeout=45):
                     timeout=(10, timeout),
                     allow_redirects=True
                 )
+
                 if r.status_code in (429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    continue  # نجرب مرة ثانية
+                    continue
                 if r.status_code == 414:
-                    return "TOO_LONG"  # نعلم أن النص طويل بزاف
+                    return "TOO_LONG"
+
                 r.raise_for_status()
+
                 try:
                     js = r.json() or {}
                 except Exception:
                     _sleep_backoff(attempt)
                     continue
+
                 return (js.get("response") or js.get("answer") or "").strip()
+
             except Exception as e:
                 _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
+
         return None
 
     def split_text(text, size=1500):
@@ -165,8 +176,9 @@ def claude45_answer(messages, timeout=45):
 
         # نجرب إرسال النص كامل أولاً
         resp = send_part(prompt)
+
         if resp == "TOO_LONG":
-            # إذا النص طويل، نقسمه على أجزاء
+            # إذا النص طويل، نقسمه على أجزاء ونجمع الرد
             for part in split_text(prompt):
                 part_resp = send_part(part)
                 if part_resp and part_resp != "TOO_LONG":
@@ -174,7 +186,7 @@ def claude45_answer(messages, timeout=45):
         elif resp:
             question_response.append(resp)
 
-        # نحافظ على كل سؤال وجوابه
+        # كل سؤال يحصل على جوابه الخاص
         if question_response:
             all_responses.append(" ".join(question_response))
         else:
