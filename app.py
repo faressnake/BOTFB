@@ -120,25 +120,18 @@ def _messages_to_prompt(messages):
             lines.append(f"[ASSISTANT]\n{content}\n")
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
-
-def claude45_answer(uid, messages, timeout=45) -> str:
-    """
-    نسخة بسيطة لتحصل على رد كامل بنفس أسلوب Botivity القديم
-    uid: معرف المستخدم للذاكرة
-    messages: قائمة الرسائل الحالية
-    """
+    
+def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL:
         return ""
 
     max_total_chars = 4000
+    max_chunk_chars = 2000
 
-    # ناخذ آخر 10 رسائل فقط
     messages = messages[-10:]
 
-    # آخر system message
+    # ناخذ system + آخر user فقط
     system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
-
-    # آخر رسالة user
     last_msg = None
     for m in reversed(messages):
         if m.get("role") == "user":
@@ -147,54 +140,52 @@ def claude45_answer(uid, messages, timeout=45) -> str:
     if not last_msg:
         last_msg = messages[-1]
 
-    # ==========================
     parts = []
-
     if system_msg:
         parts.append(system_msg.get("content", ""))
-
-    # نجيب آخر 3 رسائل فقط من الذاكرة لتخفيف طول prompt
-    memory_msgs = mem_get(uid)[-3:]
-    for mem in memory_msgs:
-        role = mem.get("role")
-        content = mem.get("content", "")
-        if role == "user":
-            parts.append(f"[USER] {content}")
-        else:
-            parts.append(f"[ASSISTANT] {content}")
-
-    # آخر رسالة حالية
-    parts.append(f"[USER] {last_msg.get('content', '')}")
-
-    # إجبار Claude45 على أسلوب Botivity القديم
-    parts.append(
-        "✅ رد فقط بأسلوب Botivity القديم، لا تذكر AI، لا تذكر نموذج لغوي، "
-        "لا تذكر Aria أو أي توقيع ثاني. اتبع البرومبت كما هو."
-    )
+    parts.append(last_msg.get("content", ""))
 
     prompt = "\n\n".join(parts)
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
-    # ==========================
 
-    try:
-        r = HTTP.get(
-            CLAUDE45_URL,
-            params={"message": prompt},
-            timeout=(10, timeout),
-            allow_redirects=True
-        )
-        r.raise_for_status()
-        js = r.json() or {}
-        answer = (js.get("response") or js.get("answer") or "").strip()
-    except Exception:
-        answer = ""
+    chunks = [prompt[i:i + max_chunk_chars] for i in range(0, len(prompt), max_chunk_chars)]
+    final_response = []
 
-    final_text = clean_reply(answer)
+    for idx, chunk in enumerate(chunks):
+        for attempt in range(4):
+            try:
+                r = HTTP.get(
+                    CLAUDE45_URL,
+                    params={"message": chunk},
+                    timeout=(10, timeout),
+                    allow_redirects=True
+                )
 
-    # حفظ الرد في الذاكرة
-    mem_push(uid, "assistant", final_text)
+                if r.status_code in (429, 500, 502, 503, 504):
+                    _sleep_backoff(attempt, r.headers.get("retry-after"))
+                    continue
 
+                if r.status_code == 414:
+                    if len(chunk) > 500:
+                        mid = len(chunk) // 2
+                        chunks.insert(idx + 1, chunk[mid:])
+                        chunks[idx] = chunk[:mid]
+                        break
+                    else:
+                        break
+
+                r.raise_for_status()
+                js = r.json() or {}
+                answer = (js.get("response") or js.get("answer") or "").strip()
+                if answer:
+                    final_response.append(answer)
+                break
+            except Exception as e:
+                _sleep_backoff(attempt)
+
+    final_text = "\n".join(final_response)
+    final_text = clean_reply(final_text)
     return final_text
 
 # ---------------------------
