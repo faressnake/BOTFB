@@ -120,19 +120,15 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
 
-def claude45_answer(messages, timeout=45) -> list:
-    """
-    ترجع قائمة بالردود لكل رسالة مستقلة.
-    لو النص طويل، يقسمه على دفعات تلقائيًا.
-    """
+def claude45_answer(messages, timeout=45):
     if not CLAUDE45_URL:
         return []
 
-    # ناخذ آخر 10 رسائل فقط
+    # ناخذ آخر 10 رسائل
     messages = messages[-10:]
 
     def send_part(part):
-        """ترسل جزء من النص وتحصل على الرد"""
+        """تحاول تبعث جزء نصي وترد الرد"""
         for attempt in range(4):
             try:
                 r = HTTP.get(
@@ -141,27 +137,19 @@ def claude45_answer(messages, timeout=45) -> list:
                     timeout=(10, timeout),
                     allow_redirects=True
                 )
-
-                if r.status_code in (429, 500, 502, 503, 504):
+                if r.status_code in (414, 429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
-                    continue
-                if r.status_code == 414:
-                    return "TOO_LONG"
-
+                    return None  # لو النص طويل، نعرف نعاود نقسمو
                 r.raise_for_status()
-
                 try:
                     js = r.json() or {}
                 except Exception:
                     _sleep_backoff(attempt)
                     continue
-
                 return (js.get("response") or js.get("answer") or "").strip()
-
             except Exception as e:
                 _log("CLAUDE45", f"TRY {attempt+1}/4 ERROR {repr(e)}")
                 _sleep_backoff(attempt)
-
         return None
 
     def split_text(text, size=1500):
@@ -171,26 +159,22 @@ def claude45_answer(messages, timeout=45) -> list:
     all_responses = []
 
     for msg in messages:
-        prompt = _messages_to_prompt([msg])
-        question_response = []
+        prompt = _messages_to_prompt([msg])  # نص الرسالة وحدها
 
-        # نجرب إرسال النص كامل أولاً
+        # نجرب إرسالها كاملة
         resp = send_part(prompt)
+        if resp is not None:
+            all_responses.append(resp)
+            continue
 
-        if resp == "TOO_LONG":
-            # إذا النص طويل، نقسمه على أجزاء ونجمع الرد
-            for part in split_text(prompt):
-                part_resp = send_part(part)
-                if part_resp and part_resp != "TOO_LONG":
-                    question_response.append(part_resp)
-        elif resp:
-            question_response.append(resp)
-
-        # كل سؤال يحصل على جوابه الخاص
-        if question_response:
-            all_responses.append(" ".join(question_response))
-        else:
-            all_responses.append("⚠️ ما قدرش يجيب الرد")
+        # لو رجع None (414 أو خطأ)، نقسم النص على دفعات
+        full_resp = ""
+        for part in split_text(prompt):
+            resp_part = send_part(part)
+            if resp_part:
+                full_resp += resp_part + " "
+        if full_resp:
+            all_responses.append(full_resp.strip())
 
     return all_responses
 # ---------------------------
