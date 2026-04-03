@@ -130,14 +130,14 @@ def claude45_answer(messages, timeout=45) -> str:
 
     messages = messages[-10:]
 
-# ✅ نخلي كامل المحادثة (system + history + user)
-prompt = _messages_to_prompt(messages)
+    # ✅ نخلي كامل المحادثة (system + history + user)
+    prompt = _messages_to_prompt(messages)
 
-# نقص الطول اذا كبير
-if len(prompt) > max_total_chars:
-    prompt = prompt[-max_total_chars:]
+    # نقص الطول اذا كبير
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
+        if len(prompt) > max_total_chars:
+            prompt = prompt[-max_total_chars:]
 
     chunks = [prompt[i:i + max_chunk_chars] for i in range(0, len(prompt), max_chunk_chars)]
     final_response = []
