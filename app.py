@@ -86,7 +86,7 @@ def _clip(s: str, n: int = 900) -> str:
 def mem_get(uid):
     return user_memory.get(uid, [])
 
-def mem_push(uid, role, content, max_keep=10):
+def mem_push(uid, role, content, max_keep=15):
     arr = user_memory.get(uid) or []
     arr.append({"role": role, "content": _clip(content, 500)})
     if len(arr) > max_keep:
@@ -130,22 +130,12 @@ def claude45_answer(messages, timeout=45) -> str:
 
     messages = messages[-10:]
 
-    # ناخذ system + آخر user فقط
-    system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
-    last_msg = None
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            last_msg = m
-            break
-    if not last_msg:
-        last_msg = messages[-1]
+# ✅ نخلي كامل المحادثة (system + history + user)
+prompt = _messages_to_prompt(messages)
 
-    parts = []
-    if system_msg:
-        parts.append(system_msg.get("content", ""))
-    parts.append(last_msg.get("content", ""))
-
-    prompt = "\n\n".join(parts)
+# نقص الطول اذا كبير
+if len(prompt) > max_total_chars:
+    prompt = prompt[-max_total_chars:]
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
 
