@@ -124,15 +124,17 @@ def claude45_answer(messages, timeout=45) -> str:
     if not CLAUDE45_URL or not messages:
         return ""
 
-    last_msg = messages[-1]  # ناخذ آخر رسالة وحدة فقط
+    last_msg = messages[-1]  # آخر رسالة وحدة فقط
 
     def send_part(part):
         """تحاول تبعث جزء نصي وترد الرد"""
+        # نضيف برومبت واضح يحفظ الأسلوب
+        payload = f"اتبع النص كما هو تماماً ورد بنفس الأسلوب دون تغيير:\n{part}"
         for attempt in range(4):
             try:
                 r = HTTP.get(
                     CLAUDE45_URL,
-                    params={"message": part},
+                    params={"message": payload},
                     timeout=(10, timeout),
                     allow_redirects=True
                 )
@@ -152,12 +154,11 @@ def claude45_answer(messages, timeout=45) -> str:
         return None
 
     def split_text(text, size=1500):
-        """تقسم النص الطويل على دفعات بطريقة ذكية"""
+        """تقسم النص الطويل على دفعات"""
         parts = []
         start = 0
         while start < len(text):
             end = start + size
-            # نحاول نقطع عند آخر نقطة قبل الحجم
             cut = text.rfind(".", start, end)
             if cut <= start:
                 cut = end
@@ -166,7 +167,7 @@ def claude45_answer(messages, timeout=45) -> str:
         return parts
 
     full_response = ""
-    prompt = _messages_to_prompt([last_msg])  # نص آخر رسالة فقط
+    prompt = last_msg.get("content") if isinstance(last_msg, dict) else str(last_msg)
 
     # نجرب إرسالها كاملة
     resp = send_part(prompt)
@@ -177,7 +178,6 @@ def claude45_answer(messages, timeout=45) -> str:
         for part in split_text(prompt):
             resp_part = send_part(part)
             if resp_part:
-                # نضيف سطر فارغ بين الأجزاء لضمان وضوح
                 full_response += resp_part + "\n\n"
 
     return full_response.strip()
