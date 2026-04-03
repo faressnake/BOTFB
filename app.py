@@ -121,19 +121,29 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
     
-def claude45_answer(messages, timeout=45) -> str:
-    if not CLAUDE45_URL:
+def claude45_answer(messages, user_id=None, timeout=45) -> str:
+    """
+    messages: قائمة الرسائل الجديدة (آخر user message)
+    user_id: باش نخلي البوت يحافظ على context لكل مستخدم
+    timeout: وقت الانتظار
+    """
+    if not CLAUDE45_URL or not messages:
         return ""
 
     max_total_chars = 4000
     max_chunk_chars = 2000
 
-    messages = messages[-10:]
+    # 👇 نحافظ على ذاكرة المستخدم إذا متوفرة
+    history = mem_get(user_id) if user_id else []
 
-    # ✅ نخلي كامل المحادثة (system + history + user)
-    prompt = _messages_to_prompt(messages)
+    # 👇 ناخذ آخر رسالة فقط
+    last_msg = messages[-1] if messages else {"role": "user", "content": ""}
+    full_context = [{"role": "system", "content": "جاوب كيما Botivity: منظم، سمح، واضح."}] + history + [last_msg]
 
-    # نقص الطول اذا كبير
+    # 👇 حوّلها لنص للـ Claude
+    prompt = _messages_to_prompt(full_context)
+
+    # 👇 نقص الطول اذا كبير
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
         if len(prompt) > max_total_chars:
@@ -176,6 +186,12 @@ def claude45_answer(messages, timeout=45) -> str:
 
     final_text = "\n".join(final_response)
     final_text = clean_reply(final_text)
+
+    # 👇 نخزن السؤال الأخير والرد في ذاكرة المستخدم
+    if user_id:
+        mem_push(user_id, "user", last_msg.get("content", ""))
+        mem_push(user_id, "assistant", final_text)
+
     return final_text
 
 # ---------------------------
