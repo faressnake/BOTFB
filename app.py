@@ -121,35 +121,26 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
     
-def claude45_answer(messages, user_id=None, timeout=45) -> str:
-    """
-    messages: قائمة الرسائل الجديدة (آخر user message)
-    user_id: معرف المستخدم
-    timeout: وقت الانتظار
-    """
+def claude45_answer(messages, user_id=None, timeout=45):
+
     if not CLAUDE45_URL or not messages:
         return ""
 
     max_total_chars = 4000
     max_chunk_chars = 2000
 
-    # ناخذ آخر رسالة فقط
-    last_msg = messages[-1] if messages else {"role": "user", "content": ""}
-    
-    # برومبت system ثابت لكل سؤال
-    full_context = [
-        {"role": "system", "content": "جاوب كيما Botivity: منظم، سمح، واضح."},
-        last_msg
-    ]
+    # ✅ خليه يستعمل كامل الرسائل (system + history + user)
+    prompt = _messages_to_prompt(messages)
 
-    # حولها لنص للـ Claude
-    prompt = _messages_to_prompt(full_context)
-
-    # نقص الطول إذا كبير
+    # نقص الحجم إذا كبير بزاف
     if len(prompt) > max_total_chars:
         prompt = prompt[-max_total_chars:]
 
-    chunks = [prompt[i:i + max_chunk_chars] for i in range(0, len(prompt), max_chunk_chars)]
+    chunks = [
+        prompt[i:i + max_chunk_chars]
+        for i in range(0, len(prompt), max_chunk_chars)
+    ]
+
     final_response = []
 
     for idx, chunk in enumerate(chunks):
@@ -161,28 +152,32 @@ def claude45_answer(messages, user_id=None, timeout=45) -> str:
                     timeout=(10, timeout),
                     allow_redirects=True
                 )
+
                 if r.status_code in (429, 500, 502, 503, 504):
                     _sleep_backoff(attempt, r.headers.get("retry-after"))
                     continue
+
                 r.raise_for_status()
+
                 js = r.json() or {}
-                answer = (js.get("response") or js.get("answer") or "").strip()
+
+                answer = (
+                    js.get("response")
+                    or js.get("answer")
+                    or ""
+                ).strip()
+
                 if answer:
                     final_response.append(answer)
+
                 break
-            except Exception as e:
+
+            except Exception:
                 _sleep_backoff(attempt)
 
     final_text = "\n".join(final_response)
-    final_text = clean_reply(final_text)
 
-    # نخزن الرد فقط بدون دمج الأسئلة القديمة
-    if user_id:
-        mem_push(user_id, "user", last_msg.get("content", ""))
-        mem_push(user_id, "assistant", final_text)
-
-    return final_text
-
+    return clean_reply(final_text)
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
