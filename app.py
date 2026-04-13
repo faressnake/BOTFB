@@ -127,9 +127,7 @@ def claude45_answer(messages, user_id=None, timeout=45):
         return ""
 
     max_total_chars = 6000
-    max_chunk_chars = 2000
 
-    # فصل system messages عن باقي الرسائل
     system_msgs = [
         m for m in messages
         if m.get("role") == "system"
@@ -140,74 +138,52 @@ def claude45_answer(messages, user_id=None, timeout=45):
         if m.get("role") != "system"
     ]
 
-    # نحافظ دائمًا على system prompt
     trimmed_msgs = []
     total_chars = 0
 
     for m in reversed(other_msgs):
-        chunk_text = _messages_to_prompt([m])
 
-        if total_chars + len(chunk_text) > max_total_chars:
+        txt = _messages_to_prompt([m])
+
+        if total_chars + len(txt) > max_total_chars:
             break
 
         trimmed_msgs.insert(0, m)
-        total_chars += len(chunk_text)
+        total_chars += len(txt)
 
-    # نركب prompt النهائي
     final_messages = system_msgs + trimmed_msgs
 
     prompt = _messages_to_prompt(final_messages)
 
-    # تقسيم prompt إذا كان كبير
-    chunks = [
-        prompt[i:i + max_chunk_chars]
-        for i in range(0, len(prompt), max_chunk_chars)
-    ]
+    try:
 
-    final_response = []
+        r = HTTP.get(
+            CLAUDE45_URL,
+            params={"message": prompt},
+            timeout=(10, timeout),
+            allow_redirects=True
+        )
 
-    for chunk in chunks:
+        if r.status_code in (429, 500, 502, 503, 504):
 
-        for attempt in range(4):
+            _sleep_backoff(0, r.headers.get("retry-after"))
+            return ""
 
-            try:
+        r.raise_for_status()
 
-                r = HTTP.get(
-                    CLAUDE45_URL,
-                    params={"message": chunk},
-                    timeout=(10, timeout),
-                    allow_redirects=True
-                )
+        js = r.json() or {}
 
-                if r.status_code in (429, 500, 502, 503, 504):
-                    _sleep_backoff(
-                        attempt,
-                        r.headers.get("retry-after")
-                    )
-                    continue
+        answer = (
+            js.get("response")
+            or js.get("answer")
+            or ""
+        ).strip()
 
-                r.raise_for_status()
+        return clean_reply(answer)
 
-                js = r.json() or {}
+    except Exception:
 
-                answer = (
-                    js.get("response")
-                    or js.get("answer")
-                    or ""
-                ).strip()
-
-                if answer:
-                    final_response.append(answer)
-
-                break
-
-            except Exception:
-
-                _sleep_backoff(attempt)
-
-    final_text = "\n".join(final_response)
-
-    return clean_reply(final_text)
+        return ""
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
