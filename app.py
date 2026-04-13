@@ -400,7 +400,7 @@ def setup():
 def clean_reply(text: str) -> str:
 
     if not text:
-        return "صرا مشكل صغير فالإجابة 😅 جرّب عاود."
+        return "صرا مشكل فالسيرفر 😅 جرّب عاود بعد شوية."
 
     forbidden = [
         r"\bopenai\b",
@@ -425,11 +425,8 @@ def clean_reply(text: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
-    # ❌ ما تحكمش على الفراغ القوي هنا
-    # نخليه يرجع الرد الأصلي بدل رسالة فشل
     if not cleaned or len(cleaned) < 2:
-    return "صرا مشكل فالسيرفر 😅 جرّب عاود بعد شوية."
-        return text  # مهم جدا
+        return "صرا مشكل فالسيرفر 😅 جرّب عاود بعد شوية."
 
     return cleaned
 # ---------------------------
