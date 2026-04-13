@@ -431,9 +431,7 @@ def clean_reply(text: str) -> str:
         return "صرا مشكل صغير فالإجابة 😅 جرّب عاود."
 
     forbidden = [
-        r"\bgpt[-\s]?\d*\b",
         r"\bopenai\b",
-        r"\bai\b",
         r"ذكاء\s*اصطناعي",
         r"نموذج\s*لغوي",
         r"language\s*model",
@@ -455,8 +453,10 @@ def clean_reply(text: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
+    # ❌ ما تحكمش على الفراغ القوي هنا
+    # نخليه يرجع الرد الأصلي بدل رسالة فشل
     if not cleaned:
-        return "صرا مشكل فالإجابة 😅 جرّب عاود."
+        return text  # مهم جدا
 
     return cleaned
 # ---------------------------
