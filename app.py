@@ -122,67 +122,39 @@ def _messages_to_prompt(messages):
     return "\n".join(lines)
     
 def claude45_answer(messages, user_id=None, timeout=45):
-
     if not CLAUDE45_URL or not messages:
         return ""
 
-    max_total_chars = 6000
-
-    system_msgs = [
-        m for m in messages
-        if m.get("role") == "system"
-    ]
-
-    other_msgs = [
-        m for m in messages
-        if m.get("role") != "system"
-    ]
-
-    trimmed_msgs = []
-    total_chars = 0
-
-    for m in reversed(other_msgs):
-
-        txt = _messages_to_prompt([m])
-
-        if total_chars + len(txt) > max_total_chars:
-            break
-
-        trimmed_msgs.insert(0, m)
-        total_chars += len(txt)
-
-    final_messages = system_msgs + trimmed_msgs
-
-    prompt = _messages_to_prompt(final_messages)
+    prompt = _messages_to_prompt(messages)
 
     try:
-
-        r = HTTP.get(
+        r = HTTP.post(
             CLAUDE45_URL,
-            params={"message": prompt},
-            timeout=(10, timeout),
-            allow_redirects=True
+            data={"message": prompt},
+            timeout=(10, timeout)
         )
 
         if r.status_code in (429, 500, 502, 503, 504):
-
-            _sleep_backoff(0, r.headers.get("retry-after"))
             return ""
 
         r.raise_for_status()
 
-        js = r.json() or {}
-
-        answer = (
-            js.get("response")
-            or js.get("answer")
-            or ""
-        ).strip()
+        # 🔥 أهم إصلاح: ما نعتمدوش JSON
+        try:
+            js = r.json()
+            answer = (
+                js.get("response")
+                or js.get("answer")
+                or ""
+            ).strip()
+        except Exception:
+            # fallback لو يرجع text مباشرة
+            answer = r.text.strip()
 
         return clean_reply(answer)
 
-    except Exception:
-
+    except Exception as e:
+        print("CLAUDE ERROR:", repr(e))
         return ""
 # ---------------------------
 # ✅ 58 ولاية
@@ -455,7 +427,8 @@ def clean_reply(text: str) -> str:
 
     # ❌ ما تحكمش على الفراغ القوي هنا
     # نخليه يرجع الرد الأصلي بدل رسالة فشل
-    if not cleaned:
+    if not cleaned or len(cleaned) < 2:
+    return "صرا مشكل فالسيرفر 😅 جرّب عاود بعد شوية."
         return text  # مهم جدا
 
     return cleaned
