@@ -127,35 +127,34 @@ def claude45_answer(messages, user_id=None, timeout=45):
 
     prompt = _messages_to_prompt(messages)
 
-    try:
-        r = HTTP.get(
-            CLAUDE45_URL,
-            params={"message": prompt},
-            timeout=(10, timeout)
-        )
-
-        if r.status_code in (429, 500, 502, 503, 504):
-            return ""
-
-        r.raise_for_status()
-
-        # محاولة JSON
+    for attempt in range(3):  # 🔁 retry
         try:
-            js = r.json()
-            answer = (
-                js.get("response")
-                or js.get("answer")
-                or ""
-            ).strip()
-        except Exception:
-            # fallback text
-            answer = r.text.strip()
+            r = HTTP.get(
+                CLAUDE45_URL,
+                params={"message": prompt},
+                timeout=(10, timeout)
+            )
 
-        return clean_reply(answer)
+            if r.status_code in (429, 500, 502, 503, 504):
+                time.sleep(1.5 * (attempt + 1))
+                continue
 
-    except Exception as e:
-        print("CLAUDE ERROR:", repr(e))
-        return ""
+            r.raise_for_status()
+
+            try:
+                js = r.json()
+                answer = (js.get("response") or js.get("answer") or "").strip()
+            except:
+                answer = r.text.strip()
+
+            if answer:
+                return clean_reply(answer)
+
+        except Exception as e:
+            print("CLAUDE ERROR:", repr(e))
+            time.sleep(1)
+
+    return ""
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
