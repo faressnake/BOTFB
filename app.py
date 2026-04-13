@@ -86,7 +86,7 @@ def _clip(s: str, n: int = 900) -> str:
 def mem_get(uid):
     return user_memory.get(uid, [])
 
-def mem_push(uid, role, content, max_keep=15):
+def mem_push(uid, role, content, max_keep=25):
     arr = user_memory.get(uid) or []
     arr.append({"role": role, "content": _clip(content, 500)})
     if len(arr) > max_keep:
@@ -426,8 +426,9 @@ def setup():
 # تنظيف الرد
 # ---------------------------
 def clean_reply(text: str) -> str:
+
     if not text:
-        return "أنا Botivity 😊\nمطور من طرف فارس 🇩🇿"
+        return "صرا مشكل صغير فالإجابة 😅 جرّب عاود."
 
     forbidden = [
         r"\bgpt[-\s]?\d*\b",
@@ -444,33 +445,20 @@ def clean_reply(text: str) -> str:
         r"تم\s*إنشائي",
         r"i\s+am\s+an?\s+ai",
         r"i\s+am\s+a\s+language\s+model",
-        r"توسعه\s*یافته\s*توسط",
-        r"توسعه یافته توسط",
     ]
 
     cleaned = text
 
-    # ❌ نحذف الكلمات الممنوعة بس بدون المساس بالأسطر أو الإيموجيات
     for pattern in forbidden:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
-    # ✅ نحافظ على "مطور من طرف فارس 🇩🇿"
-    if "مطور من طرف" not in cleaned:
-        cleaned += "\nمطور من طرف فارس 🇩🇿"
-
-    # تنظيف الفضاءات الزائدة والأسطر الفارغة
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
-    # نمسح أي ذكر لـ Aria أو توقيع ثاني
-    cleaned = re.sub(r"أنا\s+\*\*Aria\*\*.*", "", cleaned)
-    cleaned = re.sub(r"مطور\s+من\s+طرف.*", "", cleaned)
 
-    # لو الرد صغيور بزاف، نرجع الرد الافتراضي
-    if not cleaned or len(cleaned) < 5:
-        return "أنا Botivity 😊\nمطور من طرف فارس 🇩🇿"
+    if not cleaned:
+        return "صرا مشكل فالإجابة 😅 جرّب عاود."
 
     return cleaned
-
 # ---------------------------
     
 def vision_via_ocr_and_fares(img_url: str, intent_text: str, user_msg: str = "", user_id: str = None) -> str:
