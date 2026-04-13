@@ -128,9 +128,9 @@ def claude45_answer(messages, user_id=None, timeout=45):
     prompt = _messages_to_prompt(messages)
 
     try:
-        r = HTTP.post(
+        r = HTTP.get(
             CLAUDE45_URL,
-            data={"message": prompt},
+            params={"message": prompt},
             timeout=(10, timeout)
         )
 
@@ -139,7 +139,7 @@ def claude45_answer(messages, user_id=None, timeout=45):
 
         r.raise_for_status()
 
-        # 🔥 أهم إصلاح: ما نعتمدوش JSON
+        # محاولة JSON
         try:
             js = r.json()
             answer = (
@@ -148,7 +148,7 @@ def claude45_answer(messages, user_id=None, timeout=45):
                 or ""
             ).strip()
         except Exception:
-            # fallback لو يرجع text مباشرة
+            # fallback text
             answer = r.text.strip()
 
         return clean_reply(answer)
