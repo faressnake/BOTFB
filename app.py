@@ -126,16 +126,39 @@ def claude45_answer(messages, user_id=None, timeout=45):
     if not CLAUDE45_URL or not messages:
         return ""
 
-    max_total_chars = 4000
+    max_total_chars = 6000
     max_chunk_chars = 2000
 
-    # ✅ خليه يستعمل كامل الرسائل (system + history + user)
-    prompt = _messages_to_prompt(messages)
+    # فصل system messages عن باقي الرسائل
+    system_msgs = [
+        m for m in messages
+        if m.get("role") == "system"
+    ]
 
-    # نقص الحجم إذا كبير بزاف
-    if len(prompt) > max_total_chars:
-        prompt = prompt[-max_total_chars:]
+    other_msgs = [
+        m for m in messages
+        if m.get("role") != "system"
+    ]
 
+    # نحافظ دائمًا على system prompt
+    trimmed_msgs = []
+    total_chars = 0
+
+    for m in reversed(other_msgs):
+        chunk_text = _messages_to_prompt([m])
+
+        if total_chars + len(chunk_text) > max_total_chars:
+            break
+
+        trimmed_msgs.insert(0, m)
+        total_chars += len(chunk_text)
+
+    # نركب prompt النهائي
+    final_messages = system_msgs + trimmed_msgs
+
+    prompt = _messages_to_prompt(final_messages)
+
+    # تقسيم prompt إذا كان كبير
     chunks = [
         prompt[i:i + max_chunk_chars]
         for i in range(0, len(prompt), max_chunk_chars)
@@ -143,9 +166,12 @@ def claude45_answer(messages, user_id=None, timeout=45):
 
     final_response = []
 
-    for idx, chunk in enumerate(chunks):
+    for chunk in chunks:
+
         for attempt in range(4):
+
             try:
+
                 r = HTTP.get(
                     CLAUDE45_URL,
                     params={"message": chunk},
@@ -154,7 +180,10 @@ def claude45_answer(messages, user_id=None, timeout=45):
                 )
 
                 if r.status_code in (429, 500, 502, 503, 504):
-                    _sleep_backoff(attempt, r.headers.get("retry-after"))
+                    _sleep_backoff(
+                        attempt,
+                        r.headers.get("retry-after")
+                    )
                     continue
 
                 r.raise_for_status()
@@ -173,6 +202,7 @@ def claude45_answer(messages, user_id=None, timeout=45):
                 break
 
             except Exception:
+
                 _sleep_backoff(attempt)
 
     final_text = "\n".join(final_response)
