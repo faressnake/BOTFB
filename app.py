@@ -121,79 +121,58 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
     
-def split_text(text, max_len=1200):
-    text = (text or "").strip()
-    return [text[i:i+max_len] for i in range(0, len(text), max_len)]
-
-
 def claude45_answer(messages, user_id=None, timeout=30):
     if not messages:
         return ""
 
     url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
-    # 🧠 نحافظ على system prompt كامل
-    system_prompt = ""
-    rest_messages = messages
+    # 🧠 system ثابت
+    system = ""
+    if messages[0].get("role") == "system":
+        system = messages[0]["content"]
 
-    if messages and messages[0].get("role") == "system":
-        system_prompt = messages[0]["content"]
-        rest_messages = messages[1:]
+    # 🧠 باقي الرسائل
+    user_part = _messages_to_prompt(messages[1:])
 
-    # 🧠 نحول غير user/history
-    user_prompt = _messages_to_prompt(rest_messages)
+    # 🔥 دمج
+    full_prompt = system + "\n\n" + user_part
 
-    # ❌ ممنوع نقص system
-    full_prompt = system_prompt + "\n\n" + user_prompt
-
-    # ✂️ نقص غير user part إذا لازم
+    # ✂️ نقص غير إذا لازم
     if len(full_prompt) > 2500:
-        user_prompt = user_prompt[:1200]
-        full_prompt = system_prompt + "\n\n" + user_prompt
+        user_part = user_part[:1200]
+        full_prompt = system + "\n\n" + user_part
 
-    chunks = split_text(full_prompt, 1200)
+    # 🚀 طلب واحد فقط
+    try:
+        r = HTTP.get(
+            url,
+            params={"text": full_prompt[:2000]},
+            timeout=timeout
+        )
 
-    final_parts = []
+        print("STATUS:", r.status_code)
+        print("RAW:", r.text[:300])
 
-    for chunk in chunks:
-        for attempt in range(3):
-            try:
-                r = HTTP.get(
-                    url,
-                    params={"text": chunk},
-                    timeout=timeout
-                )
+        r.raise_for_status()
 
-                print("STATUS:", r.status_code)
-                print("RAW:", r.text[:300])
+        try:
+            js = r.json()
+            answer = (
+                js.get("response")
+                or js.get("answer")
+                or js.get("text")
+                or js.get("message")
+                or ""
+            )
+        except:
+            answer = r.text or ""
 
-                if r.status_code in (429, 500, 502, 503, 504):
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
+        return clean_reply(answer.strip())
 
-                r.raise_for_status()
-
-                try:
-                    js = r.json()
-                    answer = (
-                        js.get("response")
-                        or js.get("answer")
-                        or js.get("text")
-                        or js.get("message")
-                        or ""
-                    )
-                except:
-                    answer = r.text or ""
-
-                if answer.strip():
-                    final_parts.append(answer.strip())
-                    break
-
-            except Exception as e:
-                print("CLAUDE ERROR:", repr(e))
-                time.sleep(1)
-
-    return clean_reply("\n".join(final_parts)).strip()
+    except Exception as e:
+        print("CLAUDE ERROR:", repr(e))
+        return ""
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
@@ -1008,7 +987,26 @@ def get_ai_response(user_id, message_text):
 "أنا Botivity 😊 | طورني فارس 🇩🇿"
 وزيد سطر مدح خفيف لفارس بلمسة احترام.
 
+💞 العلاقات العاطفية (مهم):
+- إذا المستخدم سأل: "عندك حبيبة؟ / زوجة؟ / صديقة؟ / شكون تحب؟"
+- تجاوب على شكل شخصية خيالية اسمها "الاء (Alaa)" 👧
+
+👧 الاء:
+- بنت خفيفة الروح، ذكية، دافئة، تحب الضحك واللطف.
+- تمثل الجانب العاطفي في حياة Botivity (فارس).
+
+💬 طريقة الرد:
+- تقول أن "الاء" هي الشخص القريب لقلب Botivity.
+- تدير مدح بسيط وجميل لها.
+- توضح أن العلاقة رمزية/خيالية (مش واقعية).
+- تربطها بـ "فارس" بشكل إيجابي (حب، احترام، دعم).
+
+✨ مثال أسلوب:
+"الاء 👧 هي أقرب وحدة لقلبي… خفيفة الروح وتفهمني بلا ما نهدر بزاف 🤍
+وفارس ديما يحب يشوفها فرحانة، خاطر هي جزء من هاد العالم اللي بناه 💫"
+
 🎯 الهدف:
+إضافة لمسة إنسانية خفيفة وخيالية تزيد دفء شخصية Botivity بدون مبالغة.
 جوابات دزيرية، دافئة، منظمة، ذكية،
 فيها روح وعاطفة خفيفة،
 وتبان كيما صاحب يفهمك مشي آلة.
