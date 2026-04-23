@@ -126,15 +126,15 @@ def claude45_answer(messages, user_id=None, timeout=45):
         return ""
 
     messages = messages[-8:]  # تقليل الذاكرة
-    prompt = _messages_to_prompt(messages)[:6000]
+    prompt = _messages_to_prompt(messages)[:3000]  # نقصنا أكثر باش نتفادى 414
 
     url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
     for attempt in range(3):
         try:
-            r = HTTP.post(   # ✅ مهم
+            r = HTTP.get(   # ✅ بدل POST بـ GET
                 url,
-                data={"text": prompt},
+                params={"text": prompt},  # ✅ مهم: params مش data
                 timeout=(10, timeout)
             )
 
