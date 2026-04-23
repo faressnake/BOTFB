@@ -126,22 +126,20 @@ def claude45_answer(messages, user_id=None, timeout=45):
         return ""
 
     prompt = _messages_to_prompt(messages)
-
     url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
-    }
+    print("🚀 SEND TO CLAUDE")
 
     for attempt in range(3):
         try:
             r = HTTP.post(
                 url,
                 data={"text": prompt},
-                headers=headers,
                 timeout=(10, timeout)
             )
+
+            print("STATUS:", r.status_code)
+            print("RAW RESPONSE:", r.text[:800])
 
             if r.status_code in (429, 500, 502, 503, 504):
                 time.sleep(1.5 * (attempt + 1))
@@ -149,23 +147,25 @@ def claude45_answer(messages, user_id=None, timeout=45):
 
             r.raise_for_status()
 
-            answer = ""
-
-            # ✅ JSON handling
             try:
                 js = r.json()
+                print("JSON:", js)
+
                 answer = (
                     js.get("response")
                     or js.get("answer")
+                    or js.get("text")
                     or js.get("message")
                     or ""
                 )
-            except:
+
+            except Exception as e:
+                print("JSON ERROR:", repr(e))
                 answer = r.text or ""
 
-            answer = clean_reply(answer)
+            print("FINAL ANSWER:", answer)
 
-            if answer:
+            if answer and answer.strip():
                 return clean_reply(answer)
 
         except Exception as e:
