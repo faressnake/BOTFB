@@ -121,33 +121,42 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
     
+def safe_text(text, limit=1200):
+    text = (text or "").strip()
+
+    # تنظيف المسافات
+    text = re.sub(r"\s+", " ", text)
+
+    # تقطيع ذكي
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0]
+
+    return text
+
 def claude45_answer(messages, user_id=None, timeout=30):
     if not messages:
         return ""
 
     url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
-    # 🧠 system ثابت
+    # استخراج system
     system = ""
-    if messages[0].get("role") == "system":
+    if messages and messages[0].get("role") == "system":
         system = messages[0]["content"]
 
-    # 🧠 باقي الرسائل
-    user_part = _messages_to_prompt(messages[1:])
+    system = safe_text(system, 700)
 
-    # 🔥 دمج
-    full_prompt = system + "\n\n" + user_part
+    # تحويل باقي الرسائل
+    user_prompt = _messages_to_prompt(messages[1:])
+    user_prompt = safe_text(user_prompt, 1200)
 
-    # ✂️ نقص غير إذا لازم
-    if len(full_prompt) > 2500:
-        user_part = user_part[:1200]
-        full_prompt = system + "\n\n" + user_part
+    # دمج نهائي
+    full_prompt = safe_text(system + "\n\n" + user_prompt, 1500)
 
-    # 🚀 طلب واحد فقط
     try:
         r = HTTP.get(
             url,
-            params={"text": full_prompt[:2000]},
+            params={"text": full_prompt},  # 🔥 مضمون ما يتعداش limit
             timeout=timeout
         )
 
