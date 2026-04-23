@@ -128,29 +128,41 @@ def claude45_answer(messages, user_id=None, timeout=45):
     prompt = _messages_to_prompt(messages)
     url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
-    print("🚀 SEND TO CLAUDE")
+    print("🚀 SEND TO CLAUDE | LEN:", len(prompt))
 
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            r = HTTP.get(
-    url,
-    params={"text": prompt},
-    timeout=(10, timeout)
-            )
+            # ✅ أول محاولة: JSON (الأفضل)
+            try:
+                r = HTTP.post(
+                    url,
+                    json={"text": prompt},
+                    timeout=(10, timeout)
+                )
+            except Exception:
+                # ✅ fallback: form-data
+                r = HTTP.post(
+                    url,
+                    data={"text": prompt},
+                    timeout=(10, timeout)
+                )
 
             print("STATUS:", r.status_code)
-            print("RAW RESPONSE:", r.text[:800])
 
             if r.status_code in (429, 500, 502, 503, 504):
-                time.sleep(1.5 * (attempt + 1))
+                print("⚠️ RETRY...", attempt)
+                _sleep_backoff(attempt, r.headers.get("Retry-After"))
                 continue
 
             r.raise_for_status()
 
+            txt = (r.text or "").strip()
+            print("RAW:", txt[:500])
+
+            # ✅ حاول JSON
+            answer = ""
             try:
                 js = r.json()
-                print("JSON:", js)
-
                 answer = (
                     js.get("response")
                     or js.get("answer")
@@ -158,21 +170,17 @@ def claude45_answer(messages, user_id=None, timeout=45):
                     or js.get("message")
                     or ""
                 )
-
-            except Exception as e:
-                print("JSON ERROR:", repr(e))
-                answer = r.text or ""
-
-            print("FINAL ANSWER:", answer)
+            except:
+                answer = txt
 
             if answer and answer.strip():
                 return clean_reply(answer)
 
         except Exception as e:
-            print("CLAUDE ERROR:", repr(e))
-            time.sleep(1)
+            print("❌ ERROR:", repr(e))
+            _sleep_backoff(attempt)
 
-    return ""
+    return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
