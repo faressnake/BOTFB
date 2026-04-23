@@ -132,10 +132,10 @@ def claude45_answer(messages, user_id=None, timeout=45):
 
     for attempt in range(3):
         try:
-            r = HTTP.post(
-                url,
-                data={"text": prompt},
-                timeout=(10, timeout)
+            r = HTTP.get(
+    url,
+    params={"text": prompt},
+    timeout=(10, timeout)
             )
 
             print("STATUS:", r.status_code)
