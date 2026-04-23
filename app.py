@@ -163,7 +163,7 @@ def claude45_answer(messages, user_id=None, timeout=45):
             except:
                 answer = r.text or ""
 
-            answer = clean_ai_text(answer)
+            answer = clean_reply(answer)
 
             if answer:
                 return clean_reply(answer)
