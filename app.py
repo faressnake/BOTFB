@@ -125,16 +125,16 @@ def claude45_answer(messages, user_id=None, timeout=45):
     if not messages:
         return ""
 
-    prompt = _messages_to_prompt(messages)
-    url = "https://viscodev.x10.mx/ClaudeM/api.php"
+    messages = messages[-8:]  # تقليل الذاكرة
+    prompt = _messages_to_prompt(messages)[:6000]
 
-    print("🚀 SEND TO CLAUDE (GET ONLY FIX)")
+    url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
     for attempt in range(3):
         try:
-            r = HTTP.get(
+            r = HTTP.post(   # ✅ مهم
                 url,
-                params={"text": prompt},   # ✅ هذا هو الصحيح 100%
+                data={"text": prompt},
                 timeout=(10, timeout)
             )
 
