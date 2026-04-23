@@ -122,16 +122,24 @@ def _messages_to_prompt(messages):
     return "\n".join(lines)
     
 def claude45_answer(messages, user_id=None, timeout=45):
-    if not CLAUDE45_URL or not messages:
+    if not messages:
         return ""
 
     prompt = _messages_to_prompt(messages)
 
-    for attempt in range(3):  # 🔁 retry
+    url = "https://viscodev.x10.mx/ClaudeM/api.php"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+    }
+
+    for attempt in range(3):
         try:
-            r = HTTP.get(
-                CLAUDE45_URL,
-                params={"message": prompt},
+            r = HTTP.post(
+                url,
+                data={"text": prompt},
+                headers=headers,
                 timeout=(10, timeout)
             )
 
@@ -141,11 +149,21 @@ def claude45_answer(messages, user_id=None, timeout=45):
 
             r.raise_for_status()
 
+            answer = ""
+
+            # ✅ JSON handling
             try:
                 js = r.json()
-                answer = (js.get("response") or js.get("answer") or "").strip()
+                answer = (
+                    js.get("response")
+                    or js.get("answer")
+                    or js.get("message")
+                    or ""
+                )
             except:
-                answer = r.text.strip()
+                answer = r.text or ""
+
+            answer = clean_ai_text(answer)
 
             if answer:
                 return clean_reply(answer)
