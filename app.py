@@ -121,52 +121,79 @@ def _messages_to_prompt(messages):
     lines.append("[ASSISTANT]\n")
     return "\n".join(lines)
     
-def claude45_answer(messages, user_id=None, timeout=45):
+def split_text(text, max_len=1200):
+    text = (text or "").strip()
+    return [text[i:i+max_len] for i in range(0, len(text), max_len)]
+
+
+def claude45_answer(messages, user_id=None, timeout=30):
     if not messages:
         return ""
 
-    messages = messages[-8:]  # تقليل الذاكرة
-    prompt = _messages_to_prompt(messages)[:3000]  # نقصنا أكثر باش نتفادى 414
-
     url = "https://viscodev.x10.mx/ClaudeM/api.php"
 
-    for attempt in range(3):
-        try:
-            r = HTTP.get(   # ✅ بدل POST بـ GET
-                url,
-                params={"text": prompt},  # ✅ مهم: params مش data
-                timeout=(10, timeout)
-            )
+    # 🧠 نحافظ على system prompt كامل
+    system_prompt = ""
+    rest_messages = messages
 
-            print("STATUS:", r.status_code)
-            print("RAW:", r.text[:500])
+    if messages and messages[0].get("role") == "system":
+        system_prompt = messages[0]["content"]
+        rest_messages = messages[1:]
 
-            if r.status_code in (429, 500, 502, 503, 504):
-                time.sleep(1.5 * (attempt + 1))
-                continue
+    # 🧠 نحول غير user/history
+    user_prompt = _messages_to_prompt(rest_messages)
 
-            r.raise_for_status()
+    # ❌ ممنوع نقص system
+    full_prompt = system_prompt + "\n\n" + user_prompt
 
+    # ✂️ نقص غير user part إذا لازم
+    if len(full_prompt) > 2500:
+        user_prompt = user_prompt[:1200]
+        full_prompt = system_prompt + "\n\n" + user_prompt
+
+    chunks = split_text(full_prompt, 1200)
+
+    final_parts = []
+
+    for chunk in chunks:
+        for attempt in range(3):
             try:
-                js = r.json()
-                answer = (
-                    js.get("response")
-                    or js.get("answer")
-                    or js.get("text")
-                    or js.get("message")
-                    or ""
+                r = HTTP.get(
+                    url,
+                    params={"text": chunk},
+                    timeout=timeout
                 )
-            except:
-                answer = r.text or ""
 
-            if answer.strip():
-                return clean_reply(answer)
+                print("STATUS:", r.status_code)
+                print("RAW:", r.text[:300])
 
-        except Exception as e:
-            print("CLAUDE ERROR:", repr(e))
-            time.sleep(1)
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
 
-    return ""
+                r.raise_for_status()
+
+                try:
+                    js = r.json()
+                    answer = (
+                        js.get("response")
+                        or js.get("answer")
+                        or js.get("text")
+                        or js.get("message")
+                        or ""
+                    )
+                except:
+                    answer = r.text or ""
+
+                if answer.strip():
+                    final_parts.append(answer.strip())
+                    break
+
+            except Exception as e:
+                print("CLAUDE ERROR:", repr(e))
+                time.sleep(1)
+
+    return clean_reply("\n".join(final_parts)).strip()
 # ---------------------------
 # ✅ 58 ولاية
 # ---------------------------
