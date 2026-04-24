@@ -1022,17 +1022,25 @@ def get_ai_response(user_id, message_text):
         return len((text or "").split()) <= 4
 
     # 🔥 ذاكرة ذكية
-    full_history = mem_get(user_id)
+full_history = mem_get(user_id)
 
-    if is_short_msg(user_q):
-        history = []
-    else:
-        history = full_history[-4:]
+# 🧠 آخر رسالة
+last_user = None
+for m in reversed(full_history):
+    if m["role"] == "user":
+        last_user = m["content"]
+        break
 
-    # ✅ messages
-    messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
-    messages += history
-    messages.append({"role": "user", "content": user_q})
+# 🔥 ذاكرة
+history = full_history[-6:]
+
+# 🧠 system مع context
+BOTIVITY_SYSTEM_FINAL = BOTIVITY_SYSTEM + f"\n🧠 آخر رسالة من المستخدم: {last_user}"
+
+# ✅ messages
+messages = [{"role": "system", "content": BOTIVITY_SYSTEM_FINAL}]
+messages += history
+messages.append({"role": "user", "content": user_q})
 
 
     # ✅ AI call
