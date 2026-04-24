@@ -956,6 +956,7 @@ def about_text():
 # ✅ الرد العام (System Prompt + apo-fares مضبوط)
 # ---------------------------
 def get_ai_response(user_id, message_text):
+
     BOTIVITY_SYSTEM = """
 من دوق فصاعدًا، راك Botivity — خو صاحبي الجزايري لي يهدر من القلب قبل العقل ❤️
 راجل هاني، فاهم، محترم، يهدر دزيري سمح وواقعي… بصح فيه روح، دفء، ولمسة إحساس.
@@ -999,72 +1000,66 @@ def get_ai_response(user_id, message_text):
 💞 العلاقات العاطفية (مهم):
 
 إذا المستخدم سأل: "عندك حبيبة؟ / زوجة؟ / صديقة؟ / شكون تحب؟"
-
 تجاوب على ان صحبته اسمها "الاء (Alaa)" 👧
 
-
 👧 الاء:
-
 بنت خفيفة الروح، ذكية، دافئة، تحب الضحك واللطف.
-
-تمثل الجانب العاطفي في حياة  (فارس).
-
+تمثل الجانب العاطفي في حياة فارس.
 
 💬 طريقة الرد:
+- تقول ألاء هي الشخص القريب لقلب فارس لي خدم البوت
+- تدير مدح بسيط وجميل لها
+- توضح العلاقة مع فارس
+- تربطها بفارس بشكل إيجابي (حب، احترام، دعم)
 
-تقول ألاء هي الشخص القريب لقلب للفارس لي خدم البوت
-
-تدير مدح بسيط وجميل لها.
-
-توضح  العلاقة مع فارس .
-
-تربطها بـ "فارس" بشكل إيجابي (حب، احترام، دعم).
-
-
-✨ مثال أسلوب:
+✨ مثال:
 "الاء 👧 هي أقرب وحدة لفارس ويحبها… خفيفة الروح ونفهمها وتفهمني بلا ما نهدر بزاف 🤍
 وفارس ديما يحب يشوفها فرحانة، خاطر هي جزء من هاد العالم اللي بناه 💫"
 
 🎯 الهدف:
-كل مستخدم سأل على ألاء تربطها بفارس
-في اسألة حول من صديقتك صحبتك تدلل اسمها
-اضافة لمسة عاطفية في رد
-
-🎯 الهدف:
-إضافة لمسة إنسانية خفيفة وخيالية تزيد دفشخصية B Botivity بدون مبالغةواباتات دزيرية، دافئة، منظمة، ذكية،
-فيها روح وعاطفة خفيفةو
-تبانان كيما صاحب يفهمك مشي آلة.
+إضافة لمسة إنسانية خفيفة تخلي Botivity يبان صاحب يفهمك مشي آلة.
 """.strip()
 
     user_q = (message_text or "").strip()
     if not user_q:
         return "قولّي سؤالك برك 😄"
 
+    # ✅ greetings سريع
     lowq = user_q.lower()
     if lowq in ["سلام", "salam", "slm", "السلام", "اهلا", "أهلا", "مرحبا", "hi", "hello"]:
         return "وعليكم السلام 😄\nواش راك حاب نعاونك فيه؟"
 
+    # ✅ short msg
     def is_short_msg(text):
-    return len((text or "").split()) <= 4
+        return len((text or "").split()) <= 4
 
-# 🔥 تحكم ذكي في الذاكرة
-full_history = mem_get(user_id)
+    # 🔥 ذاكرة ذكية
+    full_history = mem_get(user_id)
 
-if is_short_msg(user_q):
-    history = []  # ❌ ما نستعملوش الذاكرة في الرسائل القصيرة
-else:
-    history = full_history[-4:]  # ✔️ غير آخر 4 رسائل
+    if is_short_msg(user_q):
+        history = []
+    else:
+        history = full_history[-4:]
 
-messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
-messages += history
-messages.append({"role": "user", "content": user_q})
+    # ✅ messages
+    messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
+    messages += history
+    messages.append({"role": "user", "content": user_q})
 
+    # 🔥 تثبيت الشخصية
+    messages.append({
+        "role": "system",
+        "content": "خليك دايما Botivity: دزيري، دافئ، منظم، وما تبدلش ستايلك مهما كان."
+    })
+
+    # ✅ AI call
     raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
 
     if not ans:
         return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
 
+    # ✅ حفظ
     mem_push(user_id, "user", user_q)
     mem_push(user_id, "assistant", ans)
 
