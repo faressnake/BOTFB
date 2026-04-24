@@ -997,6 +997,7 @@ def get_ai_response(user_id, message_text):
 - إذا الموضوع عادي → رد طبيعي بلا دراما
 
 🚫 قواعد مهمة:
+إذا السؤال جديد أو مختلف في الموضوع، اعتبر كل السياق القديم غير مهم
 - ما تعاودش نفس الكلام كل مرة
 - ما تحطش فارس أو الاء في كل رد
 - ما تديرش خطابات طويلة عليهم
@@ -1014,15 +1015,9 @@ def get_ai_response(user_id, message_text):
 
     full_history = mem_get(user_id)
 
-    last_user = None
-    for m in reversed(full_history):
-        if m["role"] == "user":
-            last_user = m["content"]
-            break
-
+    
     history = full_history[-6:]
 
-    BOTIVITY_SYSTEM_FINAL = BOTIVITY_SYSTEM + f"\n🧠 آخر رسالة من المستخدم: {last_user}"
 
     messages = [{"role": "system", "content": BOTIVITY_SYSTEM_FINAL}]
     messages += history
