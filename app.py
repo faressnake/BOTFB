@@ -1019,7 +1019,7 @@ def get_ai_response(user_id, message_text):
     history = full_history[-6:]
 
 
-    messages = [{"role": "system", "content": BOTIVITY_SYSTEM_FINAL}]
+    messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
     messages += history
     messages.append({"role": "user", "content": user_q})
 
