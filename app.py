@@ -954,7 +954,7 @@ def about_text():
 
 # ---------------------------
 # ✅ الرد العام (System Prompt + apo-fares مضبوط)
-# ---------------------------
+
 def get_ai_response(user_id, message_text):
 
     BOTIVITY_SYSTEM = """
@@ -1006,51 +1006,34 @@ def get_ai_response(user_id, message_text):
 ✔ لازم الرد يكون طبيعي حسب السؤال مباشرة
 📌 القاعدة الذهبية:
 خلي الكلام يبان كيما إنسان يهدر، مشي كأنه سكريبت محفوظ.
-"""
+""".strip()
 
     user_q = (message_text or "").strip()
     if not user_q:
         return "قولّي سؤالك برك 😄"
 
-    # ✅ greetings سريع
-    lowq = user_q.lower()
-    if lowq in ["سلام", "salam", "slm", "السلام", "اهلا", "أهلا", "مرحبا", "hi", "hello"]:
-        return "وعليكم السلام 😄\nواش راك حاب نعاونك فيه؟"
+    full_history = mem_get(user_id)
 
-    # ✅ short msg
-    def is_short_msg(text):
-        return len((text or "").split()) <= 4
+    last_user = None
+    for m in reversed(full_history):
+        if m["role"] == "user":
+            last_user = m["content"]
+            break
 
-    # 🔥 ذاكرة ذكية
-full_history = mem_get(user_id)
+    history = full_history[-6:]
 
-# 🧠 آخر رسالة
-last_user = None
-for m in reversed(full_history):
-    if m["role"] == "user":
-        last_user = m["content"]
-        break
+    BOTIVITY_SYSTEM_FINAL = BOTIVITY_SYSTEM + f"\n🧠 آخر رسالة من المستخدم: {last_user}"
 
-# 🔥 ذاكرة
-history = full_history[-6:]
+    messages = [{"role": "system", "content": BOTIVITY_SYSTEM_FINAL}]
+    messages += history
+    messages.append({"role": "user", "content": user_q})
 
-# 🧠 system مع context
-BOTIVITY_SYSTEM_FINAL = BOTIVITY_SYSTEM + f"\n🧠 آخر رسالة من المستخدم: {last_user}"
-
-# ✅ messages
-messages = [{"role": "system", "content": BOTIVITY_SYSTEM_FINAL}]
-messages += history
-messages.append({"role": "user", "content": user_q})
-
-
-    # ✅ AI call
     raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
 
     if not ans:
         return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
 
-    # ✅ حفظ
     mem_push(user_id, "user", user_q)
     mem_push(user_id, "assistant", ans)
 
