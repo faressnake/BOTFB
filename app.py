@@ -1044,12 +1044,20 @@ def get_ai_response(user_id, message_text):
     if lowq in ["سلام", "salam", "slm", "السلام", "اهلا", "أهلا", "مرحبا", "hi", "hello"]:
         return "وعليكم السلام 😄\nواش راك حاب نعاونك فيه؟"
 
-    # ✅ history خفيف
-    history = mem_get(user_id)
+    def is_short_msg(text):
+    return len((text or "").split()) <= 4
 
-    messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
-    messages += history
-    messages.append({"role": "user", "content": user_q})
+# 🔥 تحكم ذكي في الذاكرة
+full_history = mem_get(user_id)
+
+if is_short_msg(user_q):
+    history = []  # ❌ ما نستعملوش الذاكرة في الرسائل القصيرة
+else:
+    history = full_history[-4:]  # ✔️ غير آخر 4 رسائل
+
+messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
+messages += history
+messages.append({"role": "user", "content": user_q})
 
     raw = claude45_answer(messages, timeout=45)
     ans = clean_reply(raw)
