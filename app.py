@@ -1010,29 +1010,31 @@ def get_ai_response(user_id, message_text):
 """.strip()
 
     user_q = (message_text or "").strip()
-    if not user_q:
-        return "قولّي سؤالك برك 😄"
+if not user_q:
+    return "قولّي سؤالك برك 😄"
 
-    full_history = mem_get(user_id)
+# خذ آخر 6 رسائل فقط (مش 2)
+history = mem_get(user_id)[-4:]
 
-    
-    history = full_history[-6:]
+messages = [
+    {"role": "system", "content": BOTIVITY_SYSTEM},
+    {"role": "system", "content": "ركز على آخر رسالة فقط، وخلي السياق مساعد فقط مش أساسي"}
+]
 
+messages += history
+messages.append({"role": "user", "content": user_q})
 
-    messages = [{"role": "system", "content": BOTIVITY_SYSTEM}]
-    messages += history
-    messages.append({"role": "user", "content": user_q})
+raw = claude45_answer(messages, timeout=45)
+ans = clean_reply(raw)
 
-    raw = claude45_answer(messages, timeout=45)
-    ans = clean_reply(raw)
+if not ans:
+    return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
 
-    if not ans:
-        return "صرا مشكل فالسيرفر 😅 جرّب بعد شوية."
+# حفظ الذكاء بطريقة صحيحة
+mem_push(user_id, "user", user_q)
+mem_push(user_id, "assistant", ans)
 
-    mem_push(user_id, "user", user_q)
-    mem_push(user_id, "assistant", ans)
-
-    return ans
+return ans
 
 # ---------------------------
 # ✅ معالجة الأزرار + الأوامر
