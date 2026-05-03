@@ -137,7 +137,7 @@ def claude45_answer(messages, user_id=None, timeout=30):
     if not messages:
         return ""
 
-    url = "https://viscodev.x10.mx/ClaudeM/api.php"
+    url = "https://viscodev.x10.mx/claude/claude-sonnet.php"
 
     # استخراج system
     system = ""
@@ -156,7 +156,7 @@ def claude45_answer(messages, user_id=None, timeout=30):
     try:
         r = HTTP.get(
             url,
-            params={"text": full_prompt},  # 🔥 مضمون ما يتعداش limit
+            params={"message": full_prompt},  # 🔥 مضمون ما يتعداش limit
             timeout=timeout
         )
 
